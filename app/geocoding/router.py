@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth.dependencies import require_role
 from app.auth.models import User, UserRole
-from app.geocoding.client import extract_coordinate, extract_label, photon_client
+from app.geocoding.client import PhotonError, extract_coordinate, extract_label, photon_client
 from app.geocoding.schemas import (
     FieldError,
     SuggestionOut,
@@ -11,6 +11,19 @@ from app.geocoding.schemas import (
 )
 
 router = APIRouter(prefix="/geocoding", tags=["geocoding"])
+
+
+def _photon_search(*args, **kwargs):
+    """Wrapper that maps upstream Photon failures to a 502 rather than an
+    opaque 500, so the frontend can distinguish 'geocoder down' from a bug.
+    """
+    try:
+        return photon_client.search(*args, **kwargs)
+    except PhotonError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="geocoding service unavailable",
+        ) from exc
 
 
 def _require_country(user: User) -> str:
@@ -30,7 +43,7 @@ def _city_matches(feature: dict, city: str) -> bool:
 @router.get("/suggest/cities", response_model=list[SuggestionOut])
 def suggest_cities(q: str, manager: User = Depends(require_role(UserRole.MANAGER))):
     country = _require_country(manager)
-    features = photon_client.search(q, countrycode=country, layers=["city", "district", "locality"])
+    features = _photon_search(q, countrycode=country, layers=["city", "district", "locality"])
     return [
         SuggestionOut(label=extract_label(f), lat=lat, lon=lon)
         for f in features
@@ -46,7 +59,7 @@ def suggest_streets(
 ):
     country = _require_country(manager)
 
-    city_features = photon_client.search(
+    city_features = _photon_search(
         city, countrycode=country, layers=["city", "district", "locality"], limit=1
     )
     if not city_features:
@@ -56,7 +69,7 @@ def suggest_streets(
     # Photon's `q` is free-text, not structured fields, so the city name is
     # folded into the query and mismatched results are post-filtered below.
     combined_query = f"{city} {q}"
-    features = photon_client.search(
+    features = _photon_search(
         combined_query, countrycode=country, layers=["street"], lat=city_lat, lon=city_lon
     )
 
@@ -84,7 +97,7 @@ def validate_address(
     """
     country = _require_country(manager)
 
-    city_features = photon_client.search(
+    city_features = _photon_search(
         payload.city, countrycode=country, layers=["city", "district", "locality"], limit=1
     )
     if not city_features:
@@ -94,7 +107,7 @@ def validate_address(
     street_query = f"{payload.city} {payload.street}"
     street_features = [
         f
-        for f in photon_client.search(
+        for f in _photon_search(
             street_query, countrycode=country, layers=["street"], lat=city_lat, lon=city_lon, limit=5
         )
         if _city_matches(f, payload.city)
@@ -106,7 +119,7 @@ def validate_address(
     street_lat, street_lon = extract_coordinate(street_features[0])
 
     house_query = f"{payload.city} {payload.street} {payload.house_number}"
-    house_features = photon_client.search(
+    house_features = _photon_search(
         house_query, countrycode=country, layers=["house"], lat=street_lat, lon=street_lon, limit=3
     )
     if not house_features:

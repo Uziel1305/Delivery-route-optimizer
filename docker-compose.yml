@@ -33,17 +33,35 @@ services:
       timeout: 5s
       retries: 10
 
+  # The osrm-backend image has no curl/wget/apt, so a small curl-based
+  # service downloads the region extract into the shared volume first.
+  # Idempotent: skips the download if the .pbf is already present.
+  osrm-download:
+    image: curlimages/curl:8.10.1
+    user: root
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        test -f /data/region.osm.pbf
+        && echo 'region extract already present, skipping download'
+        || curl -fL --retry 3
+        https://download.geofabrik.de/asia/israel-and-palestine-latest.osm.pbf
+        -o /data/region.osm.pbf
+    volumes:
+      - osrm_data:/data
+
   osrm-init:
-    image: osrm/osrm-backend:v6.0.0
+    image: osrm/osrm-backend:v5.25.0
+    depends_on:
+      osrm-download:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/data-init/init.sh"]
-    environment:
-      OSRM_REGION_URL: https://download.geofabrik.de/asia/israel-and-palestine-latest.osm.pbf
     volumes:
       - osrm_data:/data
       - ./osrm/init.sh:/data-init/init.sh:ro
 
   osrm-routed:
-    image: osrm/osrm-backend:v6.0.0
+    image: osrm/osrm-backend:v5.25.0
     depends_on:
       osrm-init:
         condition: service_completed_successfully
@@ -69,7 +87,9 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # Run migrations before serving. Only the backend migrates (the worker
+    # does not) to avoid a concurrent "alembic upgrade head" race.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
 
   worker:
     build:

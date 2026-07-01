@@ -4,6 +4,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
+# Photon's public instance rejects the default python-httpx User-Agent with a
+# 403; a descriptive UA (per its usage policy) is required.
+_USER_AGENT = "DeliveryRouteOptimizer/0.1 (Bar-Ilan project; geocoding proxy)"
+
+
+class PhotonError(Exception):
+    """Raised when the upstream Photon service is unreachable or errors."""
+
 
 class PhotonClient:
     """Thin wrapper around the Photon (Komoot) public geocoding API.
@@ -34,8 +42,16 @@ class PhotonClient:
             params["lat"] = lat
             params["lon"] = lon
 
-        response = httpx.get(f"{self.base_url}/api", params=params, timeout=self.timeout_seconds)
-        response.raise_for_status()
+        try:
+            response = httpx.get(
+                f"{self.base_url}/api",
+                params=params,
+                timeout=self.timeout_seconds,
+                headers={"User-Agent": _USER_AGENT},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise PhotonError(f"Photon request failed: {exc}") from exc
         payload = response.json()
         return payload.get("features", [])
 
