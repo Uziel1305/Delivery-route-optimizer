@@ -352,6 +352,8 @@ export default function JobDetailPage() {
                   .map((r, i) => {
                     const courier = courierById[r.job_courier_id];
                     const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+                    const legsSum = r.stops.reduce((sum, s) => sum + s.leg_travel_seconds, 0);
+                    const returnLegSeconds = Math.max(0, r.total_travel_seconds - legsSum);
                     return (
                       <div key={r.job_courier_id} className="route-group">
                         <div className="route-group-header">
@@ -364,34 +366,52 @@ export default function JobDetailPage() {
                           </div>
                         </div>
                         <div className="route-group-body">
+                          <div className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
+                            <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
+                            <div style={{ flex: 1 }}>
+                              <strong>Depot</strong> <span className="stat">(start — can't be moved)</span>
+                            </div>
+                          </div>
+
                           {r.stops.map((s) => {
                             const st = stopById[s.job_stop_id];
                             return (
-                              <div key={s.job_stop_id} className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
-                                <span className="stop-index" style={{ background: color }}>
-                                  {s.sequence_index + 1}
-                                </span>
-                                <div style={{ flex: 1 }}>{st?.address_label || s.job_stop_id.slice(0, 8)}</div>
-                                {editable && couriers.length > 1 && (
-                                  <select
-                                    className="select"
-                                    style={{ width: "auto", padding: "4px 8px", fontSize: 13 }}
-                                    value=""
-                                    onChange={(e) => e.target.value && swapStop(s.job_stop_id, e.target.value)}
-                                  >
-                                    <option value="">Move to…</option>
-                                    {couriers
-                                      .filter((c) => c.job_courier_id !== r.job_courier_id)
-                                      .map((c) => (
-                                        <option key={c.job_courier_id} value={c.job_courier_id}>
-                                          {c.username}
-                                        </option>
-                                      ))}
-                                  </select>
-                                )}
+                              <div key={s.job_stop_id}>
+                                <div className="route-leg">{formatDuration(s.leg_travel_seconds)} drive</div>
+                                <div className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
+                                  <span className="stop-index" style={{ background: color }}>
+                                    {s.sequence_index + 1}
+                                  </span>
+                                  <div style={{ flex: 1 }}>{st?.address_label || s.job_stop_id.slice(0, 8)}</div>
+                                  {editable && couriers.length > 1 && (
+                                    <select
+                                      className="select"
+                                      style={{ width: "auto", padding: "4px 8px", fontSize: 13 }}
+                                      value=""
+                                      onChange={(e) => e.target.value && swapStop(s.job_stop_id, e.target.value)}
+                                    >
+                                      <option value="">Move to…</option>
+                                      {couriers
+                                        .filter((c) => c.job_courier_id !== r.job_courier_id)
+                                        .map((c) => (
+                                          <option key={c.job_courier_id} value={c.job_courier_id}>
+                                            {c.username}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
+
+                          <div className="route-leg">{formatDuration(returnLegSeconds)} drive</div>
+                          <div className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
+                            <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
+                            <div style={{ flex: 1 }}>
+                              <strong>Depot</strong> <span className="stat">(end — can't be moved)</span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );

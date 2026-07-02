@@ -472,6 +472,18 @@ h3 {
   border-radius: 50%;
   flex-shrink: 0;
 }
+.route-leg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 13px;
+  padding-left: 12px;
+  border-left: 2px dotted var(--border);
+  min-height: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 /* ---------- Misc ---------- */
 .toolbar {
