@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
-import AddressForm from "../../components/AddressForm";
 import RouteMap, { ROUTE_COLORS } from "../../components/RouteMap";
 import { Icon } from "../../components/icons";
-import { formatDate, formatDuration, statusBadgeClass } from "../../utils/format";
+import { formatDate, formatDateTime, formatDuration, statusBadgeClass } from "../../utils/format";
 
 export default function JobDetailPage() {
   const { jobId } = useParams();
@@ -16,7 +15,6 @@ export default function JobDetailPage() {
   const [options, setOptions] = useState([]);
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [addingStop, setAddingStop] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [nCouriers, setNCouriers] = useState("");
   const [error, setError] = useState(null);
@@ -59,21 +57,6 @@ export default function JobDetailPage() {
   }, [jobId]);
 
   const selectedOption = options.find((o) => o.id === selectedOptionId) || null;
-
-  async function addStop(coord) {
-    setAddingStop(true);
-    try {
-      await api.post(`/jobs/${jobId}/stops`, {
-        lat: coord.lat,
-        lon: coord.lon,
-        service_time_seconds: 120,
-        address_label: coord.label,
-      });
-      await loadCore();
-    } finally {
-      setAddingStop(false);
-    }
-  }
 
   function toggleLocation(id) {
     setCheckedLocationIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -210,37 +193,46 @@ export default function JobDetailPage() {
       <div className="split">
         {/* LEFT: stops + generation controls */}
         <div>
-          {savedLocations.length > 0 && (
-            <div className="card card-pad" style={{ marginBottom: 20 }}>
-              <h3 style={{ marginBottom: 16 }}>Add from saved locations</h3>
-              <div className="list" style={{ marginBottom: 12 }}>
-                {savedLocations.map((loc) => (
-                  <label
-                    key={loc.id}
-                    style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!checkedLocationIds[loc.id]}
-                      onChange={() => toggleLocation(loc.id)}
-                    />
-                    {loc.address_label}
-                  </label>
-                ))}
-              </div>
-              <button
-                className="btn btn-primary btn-block"
-                disabled={addingFromLocations || !Object.values(checkedLocationIds).some(Boolean)}
-                onClick={addFromSavedLocations}
-              >
-                {addingFromLocations ? "Adding…" : "Add selected"}
-              </button>
-            </div>
-          )}
-
           <div className="card card-pad" style={{ marginBottom: 20 }}>
-            <h3 style={{ marginBottom: 16 }}>Add a delivery stop</h3>
-            <AddressForm onResolved={addStop} submitting={addingStop} />
+            <h3 style={{ marginBottom: 16 }}>Add from saved locations</h3>
+            {savedLocations.length === 0 ? (
+              <div className="empty" style={{ padding: 24 }}>
+                No saved locations yet. Stops can only be added from your address book —
+                <br />
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ marginTop: 10 }}
+                  onClick={() => navigate("/manager/locations")}
+                >
+                  Add delivery locations
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="list" style={{ marginBottom: 12 }}>
+                  {savedLocations.map((loc) => (
+                    <label
+                      key={loc.id}
+                      style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!checkedLocationIds[loc.id]}
+                        onChange={() => toggleLocation(loc.id)}
+                      />
+                      {loc.address_label}
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="btn btn-primary btn-block"
+                  disabled={addingFromLocations || !Object.values(checkedLocationIds).some(Boolean)}
+                  onClick={addFromSavedLocations}
+                >
+                  {addingFromLocations ? "Adding…" : "Add selected"}
+                </button>
+              </>
+            )}
           </div>
 
           <div className="card card-pad" style={{ marginBottom: 20 }}>
@@ -254,7 +246,10 @@ export default function JobDetailPage() {
                 {stops.map((s) => (
                   <div key={s.id} className="stop-pill">
                     <Icon.Pin />
-                    <div style={{ flex: 1 }}>{s.address_label}</div>
+                    <div style={{ flex: 1 }}>
+                      <div>{s.address_label}</div>
+                      <div className="list-row-sub">Added {formatDateTime(s.created_at)}</div>
+                    </div>
                     <button className="btn btn-danger btn-sm" onClick={() => deleteStop(s.id)}>
                       <Icon.Trash />
                     </button>

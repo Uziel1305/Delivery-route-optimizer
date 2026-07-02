@@ -76,6 +76,7 @@ class StopOut(BaseModel):
     lon: float
     service_time_seconds: int
     address_label: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

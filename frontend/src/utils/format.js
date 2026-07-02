@@ -27,6 +27,20 @@ export function formatDate(dateStr) {
   return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
+export function formatDateTime(isoStr) {
+  if (!isoStr) return "—";
+  // Full ISO timestamp (e.g. a JobStop's created_at) — unlike formatDate,
+  // this always includes a time component and a real timezone offset, so
+  // native Date parsing is correct here (no local-vs-UTC ambiguity).
+  const d = new Date(isoStr);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function todayISO() {
   const d = new Date();
   const y = d.getFullYear();

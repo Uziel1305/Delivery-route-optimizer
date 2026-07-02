@@ -60,6 +60,7 @@ class JobStop(Base):
     lon: Mapped[float] = mapped_column(Float, nullable=False)
     service_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     address_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="stops", foreign_keys=[job_id])

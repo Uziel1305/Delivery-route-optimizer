@@ -183,7 +183,7 @@ def list_stops(
     return (
         db.query(JobStop)
         .filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None))
-        .order_by(JobStop.id)
+        .order_by(JobStop.created_at)
         .all()
     )
 

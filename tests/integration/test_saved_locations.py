@@ -91,6 +91,11 @@ def test_add_stops_from_saved_locations(client, unique_suffix):
     assert (LOCATION_A["lat"], LOCATION_A["lon"]) in coords
     assert (LOCATION_B["lat"], LOCATION_B["lon"]) in coords
 
+    # Each stop records when it was inserted, and the list is ordered by that.
+    for s in stops:
+        assert s["created_at"]
+    assert stops == sorted(stops, key=lambda s: s["created_at"])
+
 
 def test_add_stops_from_locations_ownership_boundary(client, unique_suffix):
     mgr_a = _manager_headers(client, unique_suffix, "d1")
