@@ -1,8 +1,8 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -38,6 +38,9 @@ class Job(Base):
     manager_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     depot_lat: Mapped[float] = mapped_column(Float, nullable=False)
     depot_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    # Nullable at the DB level so this migration is safe against any existing
+    # rows; the API requires it on creation via JobCreateRequest instead.
+    delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), nullable=False, default=JobStatus.DRAFT)
     published_option_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("options.id", use_alter=True), nullable=True
@@ -136,3 +139,20 @@ class OptionUnassignedStop(Base):
     job_stop_id: Mapped[str] = mapped_column(String(36), ForeignKey("job_stops.id"), nullable=False, index=True)
 
     option: Mapped["Option"] = relationship(back_populates="unassigned_stops")
+
+
+class SavedLocation(Base):
+    """A manager's reusable delivery-address book. Quick-adding one to a job
+    just copies its fields into a new JobStop — no link is kept back to this
+    row, so there's no "already added to this job" tracking.
+    """
+
+    __tablename__ = "saved_locations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    manager_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)
+    lon: Mapped[float] = mapped_column(Float, nullable=False)
+    service_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    address_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

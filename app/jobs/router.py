@@ -17,15 +17,23 @@ from app.jobs.models import (
     OptionRouteStop,
     OptionStatus,
     OptionUnassignedStop,
+    SavedLocation,
 )
 from app.jobs.schemas import (
+    AddStopsFromLocationsRequest,
     AssignmentStopOut,
+    CourierJobOut,
     CourierRouteOut,
     GenerateWithNRequest,
+    JobCourierOut,
     JobCreateRequest,
+    JobDetailOut,
     JobOut,
+    JobSummaryOut,
     OptionOut,
     RouteStopOut,
+    SavedLocationCreateRequest,
+    SavedLocationOut,
     StopCreateRequest,
     StopOut,
     SwapRequest,
@@ -97,7 +105,12 @@ def create_job(
     manager: User = Depends(require_role(UserRole.MANAGER)),
     db: Session = Depends(get_db),
 ):
-    job = Job(manager_id=manager.id, depot_lat=payload.depot_lat, depot_lon=payload.depot_lon)
+    job = Job(
+        manager_id=manager.id,
+        depot_lat=payload.depot_lat,
+        depot_lon=payload.depot_lon,
+        delivery_date=payload.delivery_date,
+    )
     db.add(job)
     db.flush()
 
@@ -114,6 +127,173 @@ def create_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+@router.get("/jobs", response_model=list[JobSummaryOut])
+def list_jobs(
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    jobs = db.query(Job).filter(Job.manager_id == manager.id).order_by(Job.created_at.desc()).all()
+    summaries = []
+    for job in jobs:
+        stop_count = (
+            db.query(JobStop).filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None)).count()
+        )
+        courier_count = db.query(JobCourier).filter(JobCourier.job_id == job.id).count()
+        summaries.append(
+            JobSummaryOut(
+                id=job.id,
+                status=job.status,
+                depot_lat=job.depot_lat,
+                depot_lon=job.depot_lon,
+                published_option_id=job.published_option_id,
+                delivery_date=job.delivery_date,
+                stop_count=stop_count,
+                courier_count=courier_count,
+            )
+        )
+    return summaries
+
+
+@router.get("/jobs/{job_id}", response_model=JobDetailOut)
+def get_job(
+    job_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    job = _get_owned_job(db, job_id, manager)
+    return JobDetailOut(
+        id=job.id,
+        status=job.status,
+        depot_lat=job.depot_lat,
+        depot_lon=job.depot_lon,
+        published_option_id=job.published_option_id,
+        delivery_date=job.delivery_date,
+    )
+
+
+@router.get("/jobs/{job_id}/stops", response_model=list[StopOut])
+def list_stops(
+    job_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    job = _get_owned_job(db, job_id, manager)
+    return (
+        db.query(JobStop)
+        .filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None))
+        .order_by(JobStop.id)
+        .all()
+    )
+
+
+@router.get("/jobs/{job_id}/couriers", response_model=list[JobCourierOut])
+def list_job_couriers(
+    job_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    job = _get_owned_job(db, job_id, manager)
+    rows = (
+        db.query(JobCourier, User)
+        .join(User, User.id == JobCourier.courier_id)
+        .filter(JobCourier.job_id == job.id)
+        .all()
+    )
+    return [
+        JobCourierOut(
+            job_courier_id=jc.id,
+            courier_id=jc.courier_id,
+            username=user.username,
+            start_time_seconds=jc.start_time_seconds,
+            end_time_seconds=jc.end_time_seconds,
+        )
+        for jc, user in rows
+    ]
+
+
+@router.post("/locations", response_model=SavedLocationOut, status_code=status.HTTP_201_CREATED)
+def create_saved_location(
+    payload: SavedLocationCreateRequest,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    location = SavedLocation(
+        manager_id=manager.id,
+        lat=payload.lat,
+        lon=payload.lon,
+        service_time_seconds=payload.service_time_seconds,
+        address_label=payload.address_label,
+    )
+    db.add(location)
+    db.commit()
+    db.refresh(location)
+    return location
+
+
+@router.get("/locations", response_model=list[SavedLocationOut])
+def list_saved_locations(
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(SavedLocation)
+        .filter(SavedLocation.manager_id == manager.id)
+        .order_by(SavedLocation.created_at)
+        .all()
+    )
+
+
+@router.delete("/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_saved_location(
+    location_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    location = (
+        db.query(SavedLocation)
+        .filter(SavedLocation.id == location_id, SavedLocation.manager_id == manager.id)
+        .first()
+    )
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.delete(location)
+    db.commit()
+
+
+@router.post("/jobs/{job_id}/stops/from-locations", response_model=list[StopOut], status_code=status.HTTP_201_CREATED)
+def add_stops_from_locations(
+    job_id: str,
+    payload: AddStopsFromLocationsRequest,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    job = _get_owned_job(db, job_id, manager)
+
+    locations = (
+        db.query(SavedLocation)
+        .filter(SavedLocation.id.in_(payload.location_ids), SavedLocation.manager_id == manager.id)
+        .all()
+    )
+    if len(locations) != len(set(payload.location_ids)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="one or more locations not found")
+
+    new_stops = [
+        JobStop(
+            job_id=job.id,
+            lat=loc.lat,
+            lon=loc.lon,
+            service_time_seconds=loc.service_time_seconds,
+            address_label=loc.address_label,
+        )
+        for loc in locations
+    ]
+    db.add_all(new_stops)
+    db.commit()
+    for s in new_stops:
+        db.refresh(s)
+    return new_stops
 
 
 @router.post("/jobs/{job_id}/stops", response_model=StopOut, status_code=status.HTTP_201_CREATED)
@@ -404,6 +584,38 @@ def _assignment_query(db: Session, courier_id: str, job_id: str | None = None):
     if job_id is not None:
         query = query.filter(JobCourier.job_id == job_id)
     return query.order_by(OptionRouteStop.sequence_index).all()
+
+
+@router.get("/couriers/me/jobs", response_model=list[CourierJobOut])
+def list_my_jobs(
+    courier: User = Depends(require_role(UserRole.COURIER)),
+    db: Session = Depends(get_db),
+):
+    """The published jobs this courier has stops in — same hard filter as the
+    assignment query (published-only, self-only via the authenticated user).
+    """
+    rows = (
+        db.query(Job, OptionRouteStop.id)
+        .join(JobCourier, JobCourier.job_id == Job.id)
+        .join(OptionCourierRoute, OptionCourierRoute.job_courier_id == JobCourier.id)
+        .join(Option, OptionCourierRoute.option_id == Option.id)
+        .join(OptionRouteStop, OptionRouteStop.option_courier_route_id == OptionCourierRoute.id)
+        .join(JobStop, OptionRouteStop.job_stop_id == JobStop.id)
+        .filter(
+            Option.status == OptionStatus.PUBLISHED,
+            JobCourier.courier_id == courier.id,
+            JobStop.deleted_at.is_(None),
+        )
+        .all()
+    )
+    counts: dict[str, list] = {}
+    for job, _route_stop_id in rows:
+        counts.setdefault(job.id, [job, 0])
+        counts[job.id][1] += 1
+    return [
+        CourierJobOut(job_id=job.id, depot_lat=job.depot_lat, depot_lon=job.depot_lon, stop_count=count)
+        for job, count in counts.values()
+    ]
 
 
 @router.get("/couriers/me/assignments", response_model=list[AssignmentStopOut])

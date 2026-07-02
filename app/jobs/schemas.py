@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from pydantic import BaseModel
 
 from app.jobs.models import CourierCountMode, JobStatus, OptionStatus
@@ -12,6 +14,7 @@ class JobCourierIn(BaseModel):
 class JobCreateRequest(BaseModel):
     depot_lat: float
     depot_lon: float
+    delivery_date: date
     couriers: list[JobCourierIn]
 
 
@@ -20,8 +23,44 @@ class JobOut(BaseModel):
     manager_id: str
     status: JobStatus
     published_option_id: str | None
+    delivery_date: date | None
 
     model_config = {"from_attributes": True}
+
+
+class JobSummaryOut(BaseModel):
+    id: str
+    status: JobStatus
+    depot_lat: float
+    depot_lon: float
+    published_option_id: str | None
+    delivery_date: date | None
+    stop_count: int
+    courier_count: int
+
+
+class JobDetailOut(BaseModel):
+    id: str
+    status: JobStatus
+    depot_lat: float
+    depot_lon: float
+    published_option_id: str | None
+    delivery_date: date | None
+
+
+class JobCourierOut(BaseModel):
+    job_courier_id: str
+    courier_id: str
+    username: str
+    start_time_seconds: int
+    end_time_seconds: int
+
+
+class CourierJobOut(BaseModel):
+    job_id: str
+    depot_lat: float
+    depot_lon: float
+    stop_count: int
 
 
 class StopCreateRequest(BaseModel):
@@ -91,3 +130,25 @@ class AssignmentStopOut(BaseModel):
     lat: float
     lon: float
     sequence_index: int
+
+
+class SavedLocationCreateRequest(BaseModel):
+    lat: float
+    lon: float
+    service_time_seconds: int = 0
+    address_label: str
+
+
+class SavedLocationOut(BaseModel):
+    id: str
+    lat: float
+    lon: float
+    service_time_seconds: int
+    address_label: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AddStopsFromLocationsRequest(BaseModel):
+    location_ids: list[str]

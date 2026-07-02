@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.models import CourierProfile, User, UserRole
 from app.auth.dependencies import require_role
 from app.couriers.models import CourierInvite, InviteStatus
-from app.couriers.schemas import CourierOut, InviteCreateRequest, InviteOut
+from app.couriers.schemas import CourierOut, InviteCreateRequest, InviteOut, MyManagerOut
 from app.database import get_db
 
 router = APIRouter(tags=["couriers"])
@@ -75,6 +75,21 @@ def cancel_invite(
 
     invite.status = InviteStatus.CANCELLED
     db.commit()
+
+
+@router.get("/couriers/me/manager", response_model=MyManagerOut)
+def get_my_manager(
+    courier: User = Depends(require_role(UserRole.COURIER)),
+    db: Session = Depends(get_db),
+):
+    profile = db.get(CourierProfile, courier.id)
+    if profile is None or profile.manager_id is None:
+        return MyManagerOut(manager_id=None, manager_username=None)
+    manager = db.get(User, profile.manager_id)
+    return MyManagerOut(
+        manager_id=profile.manager_id,
+        manager_username=manager.username if manager else None,
+    )
 
 
 @router.get("/couriers/me/invites", response_model=list[InviteOut])

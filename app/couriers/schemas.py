@@ -22,3 +22,8 @@ class CourierOut(BaseModel):
     email: str
 
     model_config = {"from_attributes": True}
+
+
+class MyManagerOut(BaseModel):
+    manager_id: str | None
+    manager_username: str | None
