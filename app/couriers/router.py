@@ -12,6 +12,38 @@ from app.database import get_db
 router = APIRouter(tags=["couriers"])
 
 
+@router.get("/managers/me/courier-suggestions", response_model=list[CourierOut])
+def suggest_couriers(
+    q: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    """Typeahead for the invite form. Only surfaces couriers who are
+    actually invitable right now — no manager yet, and no pending invite
+    already out from this manager — so a suggestion never leads to a 409.
+    """
+    if not q.strip():
+        return []
+    pending_courier_ids = (
+        db.query(CourierInvite.courier_id)
+        .filter(CourierInvite.manager_id == manager.id, CourierInvite.status == InviteStatus.PENDING)
+        .subquery()
+    )
+    return (
+        db.query(User)
+        .join(CourierProfile, CourierProfile.user_id == User.id)
+        .filter(
+            User.role == UserRole.COURIER,
+            User.username.ilike(f"%{q}%"),
+            CourierProfile.manager_id.is_(None),
+            User.id.not_in(pending_courier_ids),
+        )
+        .order_by(User.username)
+        .limit(8)
+        .all()
+    )
+
+
 @router.post("/managers/me/invites", response_model=InviteOut, status_code=status.HTTP_201_CREATED)
 def send_invite(
     payload: InviteCreateRequest,

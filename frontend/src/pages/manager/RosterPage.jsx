@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { Icon } from "../../components/icons";
 
@@ -10,6 +10,9 @@ export default function RosterPage() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestDebounce = useRef();
 
   async function load() {
     setLoading(true);
@@ -22,6 +25,23 @@ export default function RosterPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (username.trim().length < 1) {
+      setSuggestions([]);
+      return;
+    }
+    clearTimeout(suggestDebounce.current);
+    suggestDebounce.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/managers/me/courier-suggestions?q=${encodeURIComponent(username)}`);
+        setSuggestions(res);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 200);
+    return () => clearTimeout(suggestDebounce.current);
+  }, [username]);
 
   async function sendInvite(e) {
     e.preventDefault();
@@ -73,13 +93,37 @@ export default function RosterPage() {
             {error && <div className="alert alert-error">{error}</div>}
             {notice && <div className="alert alert-success">{notice}</div>}
             <form onSubmit={sendInvite} className="toolbar">
-              <input
-                className="input"
-                placeholder="Courier username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                style={{ flex: 1 }}
-              />
+              <div className="suggest-box" style={{ flex: 1 }}>
+                <input
+                  className="input"
+                  placeholder="Courier username"
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  autoComplete="off"
+                />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="suggest-list">
+                    {suggestions.map((c) => (
+                      <div
+                        key={c.id}
+                        className="suggest-item"
+                        onMouseDown={() => {
+                          setUsername(c.username);
+                          setShowSuggestions(false);
+                        }}
+                      >
+                        {c.username}
+                        <span style={{ color: "#94a3b8" }}> · {c.email}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button className="btn btn-primary" disabled={busy || !username}>
                 <Icon.Plus /> Send invite
               </button>
