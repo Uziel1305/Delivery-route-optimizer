@@ -176,7 +176,7 @@ export default function JobDetailPage() {
         <div>
           <div className="toolbar" style={{ marginBottom: 6 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => navigate("/manager/jobs")}>
-              ← Deliveries
+              ← Delivery Days
             </button>
             <span className={statusBadgeClass(job.status)}>{job.status.replace("_", " ")}</span>
           </div>

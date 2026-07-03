@@ -17,7 +17,7 @@ export default function Layout() {
         {isManager ? (
           <>
             <NavLink to="/manager/jobs" className="nav-link">
-              <Icon.Package /> Deliveries
+              <Icon.Package /> Delivery Days
             </NavLink>
             <NavLink to="/manager/locations" className="nav-link">
               <Icon.Pin /> Delivery Locations

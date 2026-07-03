@@ -173,6 +173,42 @@ def get_job(
     )
 
 
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(
+    job_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    job = _get_owned_job(db, job_id, manager)
+
+    # No FK cascades in the schema, so tear down children manually, leaves first.
+    option_ids = [oid for (oid,) in db.query(Option.id).filter(Option.job_id == job.id).all()]
+    if option_ids:
+        route_ids = [
+            rid
+            for (rid,) in db.query(OptionCourierRoute.id)
+            .filter(OptionCourierRoute.option_id.in_(option_ids))
+            .all()
+        ]
+        if route_ids:
+            db.query(OptionRouteStop).filter(
+                OptionRouteStop.option_courier_route_id.in_(route_ids)
+            ).delete()
+        db.query(OptionUnassignedStop).filter(OptionUnassignedStop.option_id.in_(option_ids)).delete()
+        db.query(OptionCourierRoute).filter(OptionCourierRoute.option_id.in_(option_ids)).delete()
+
+        # jobs.published_option_id and options.job_id point at each other, so
+        # break the cycle before the options can go.
+        job.published_option_id = None
+        db.flush()
+        db.query(Option).filter(Option.job_id == job.id).delete()
+
+    db.query(JobStop).filter(JobStop.job_id == job.id).delete()
+    db.query(JobCourier).filter(JobCourier.job_id == job.id).delete()
+    db.delete(job)
+    db.commit()
+
+
 @router.get("/jobs/{job_id}/stops", response_model=list[StopOut])
 def list_stops(
     job_id: str,

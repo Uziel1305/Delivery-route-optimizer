@@ -21,15 +21,30 @@ export default function JobsPage() {
     load();
   }, []);
 
+  function localTodayISO() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  async function deleteJob(job) {
+    const dayPassed = job.delivery_date && job.delivery_date < localTodayISO();
+    if (!dayPassed && !confirm("Delete this delivery day? Couriers will lose any published routes for it.")) {
+      return;
+    }
+    await api.delete(`/jobs/${job.id}`);
+    await load();
+  }
+
   return (
     <>
       <div className="page-header">
         <div>
-          <h1>Deliveries</h1>
-          <div className="page-subtitle">Delivery runs you've created.</div>
+          <h1>Delivery Days</h1>
+          <div className="page-subtitle">Delivery days you've created.</div>
         </div>
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-          <Icon.Plus /> New delivery
+          <Icon.Plus /> New delivery day
         </button>
       </div>
 
@@ -38,7 +53,7 @@ export default function JobsPage() {
       ) : jobs.length === 0 ? (
         <div className="card empty">
           <div className="empty-icon">📦</div>
-          No deliveries yet. Create your first delivery run.
+          No delivery days yet. Create your first one.
         </div>
       ) : (
         <div className="list">
@@ -60,7 +75,19 @@ export default function JobsPage() {
                   </div>
                 </div>
               </div>
-              <span className={statusBadgeClass(job.status)}>{job.status.replace("_", " ")}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span className={statusBadgeClass(job.status)}>{job.status.replace("_", " ")}</span>
+                <button
+                  className="btn btn-danger btn-sm"
+                  title="Delete this delivery day"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteJob(job);
+                  }}
+                >
+                  <Icon.Trash />
+                </button>
+              </div>
             </div>
           ))}
         </div>

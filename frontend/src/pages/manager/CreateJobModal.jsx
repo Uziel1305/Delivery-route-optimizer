@@ -58,7 +58,7 @@ export default function CreateJobModal({ onClose, onCreated }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">New delivery job</h2>
+        <h2 className="modal-title">New delivery day</h2>
 
         {step === 1 && (
           <>
@@ -142,7 +142,7 @@ export default function CreateJobModal({ onClose, onCreated }) {
                 disabled={busy || Object.keys(selected).length === 0 || !deliveryDate}
                 onClick={createJob}
               >
-                {busy ? "Creating…" : "Create delivery"}
+                {busy ? "Creating…" : "Create delivery day"}
               </button>
             </div>
           </>
