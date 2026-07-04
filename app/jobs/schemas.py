@@ -14,6 +14,7 @@ class JobCourierIn(BaseModel):
 class JobCreateRequest(BaseModel):
     depot_lat: float
     depot_lon: float
+    depot_address_label: str | None = None
     delivery_date: date
     couriers: list[JobCourierIn]
 
@@ -44,6 +45,7 @@ class JobDetailOut(BaseModel):
     status: JobStatus
     depot_lat: float
     depot_lon: float
+    depot_address_label: str | None
     published_option_id: str | None
     delivery_date: date | None
 
@@ -60,6 +62,7 @@ class CourierJobOut(BaseModel):
     job_id: str
     depot_lat: float
     depot_lon: float
+    depot_address_label: str | None
     stop_count: int
 
 

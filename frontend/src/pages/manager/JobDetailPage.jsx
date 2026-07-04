@@ -370,6 +370,7 @@ export default function JobDetailPage() {
                             <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
                             <div style={{ flex: 1 }}>
                               <strong>Depot</strong> <span className="stat">(start — can't be moved)</span>
+                              {job.depot_address_label && <div className="stat">{job.depot_address_label}</div>}
                             </div>
                           </div>
 
@@ -410,6 +411,7 @@ export default function JobDetailPage() {
                             <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
                             <div style={{ flex: 1 }}>
                               <strong>Depot</strong> <span className="stat">(end — can't be moved)</span>
+                              {job.depot_address_label && <div className="stat">{job.depot_address_label}</div>}
                             </div>
                           </div>
                         </div>

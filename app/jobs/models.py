@@ -38,6 +38,8 @@ class Job(Base):
     manager_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     depot_lat: Mapped[float] = mapped_column(Float, nullable=False)
     depot_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    # Nullable: jobs created before this column existed have no label.
+    depot_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Nullable at the DB level so this migration is safe against any existing
     # rows; the API requires it on creation via JobCreateRequest instead.
     delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)

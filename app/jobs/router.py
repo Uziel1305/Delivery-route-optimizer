@@ -109,6 +109,7 @@ def create_job(
         manager_id=manager.id,
         depot_lat=payload.depot_lat,
         depot_lon=payload.depot_lon,
+        depot_address_label=payload.depot_address_label,
         delivery_date=payload.delivery_date,
     )
     db.add(job)
@@ -168,6 +169,7 @@ def get_job(
         status=job.status,
         depot_lat=job.depot_lat,
         depot_lon=job.depot_lon,
+        depot_address_label=job.depot_address_label,
         published_option_id=job.published_option_id,
         delivery_date=job.delivery_date,
     )
@@ -649,7 +651,13 @@ def list_my_jobs(
         counts.setdefault(job.id, [job, 0])
         counts[job.id][1] += 1
     return [
-        CourierJobOut(job_id=job.id, depot_lat=job.depot_lat, depot_lon=job.depot_lon, stop_count=count)
+        CourierJobOut(
+            job_id=job.id,
+            depot_lat=job.depot_lat,
+            depot_lon=job.depot_lon,
+            depot_address_label=job.depot_address_label,
+            stop_count=count,
+        )
         for job, count in counts.values()
     ]
 

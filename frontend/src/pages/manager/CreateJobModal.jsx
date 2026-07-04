@@ -45,6 +45,7 @@ export default function CreateJobModal({ onClose, onCreated }) {
       const job = await api.post("/jobs", {
         depot_lat: depot.lat,
         depot_lon: depot.lon,
+        depot_address_label: depot.label,
         delivery_date: deliveryDate,
         couriers,
       });
