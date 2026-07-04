@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -44,5 +44,19 @@ class CourierProfile(Base):
     manager_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     default_start_time_seconds: Mapped[int] = mapped_column(Integer, default=8 * 3600)
     default_end_time_seconds: Mapped[int] = mapped_column(Integer, default=17 * 3600)
+    # Default route terminals: where this courier starts and ends a delivery
+    # day. Nullable = not onboarded yet; such a courier can't be added to a
+    # delivery day. Copied into job_couriers on assignment (copy-on-assign),
+    # so later changes never rewrite an existing day.
+    start_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    end_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="courier_profile", foreign_keys=[user_id])
+
+    @property
+    def has_locations(self) -> bool:
+        return self.start_lat is not None and self.end_lat is not None

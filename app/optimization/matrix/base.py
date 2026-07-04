@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from app.optimization.models import Depot, Stop, TimeMatrix
+from app.optimization.models import Courier, Stop, TimeMatrix
 
 
 class TimeMatrixProvider(ABC):
     @abstractmethod
-    def get_matrix(self, depot: Depot, stops: tuple[Stop, ...]) -> TimeMatrix:
+    def get_matrix(self, couriers: tuple[Courier, ...], stops: tuple[Stop, ...]) -> TimeMatrix:
         ...

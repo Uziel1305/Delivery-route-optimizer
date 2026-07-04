@@ -31,6 +31,9 @@ export default function Layout() {
             <NavLink to="/courier/assignments" className="nav-link">
               <Icon.Map /> My Routes
             </NavLink>
+            <NavLink to="/courier/locations" className="nav-link">
+              <Icon.Pin /> My Locations
+            </NavLink>
             <NavLink to="/courier/invites" className="nav-link">
               <Icon.Mail /> Invites
             </NavLink>

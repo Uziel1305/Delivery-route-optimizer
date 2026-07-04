@@ -46,6 +46,14 @@ export default function AssignmentsPage() {
           {
             color: ROUTE_COLORS[0],
             label: "Your route",
+            start:
+              selectedJob.start_lat != null
+                ? { lat: selectedJob.start_lat, lon: selectedJob.start_lon, label: selectedJob.start_address_label }
+                : null,
+            end:
+              selectedJob.end_lat != null
+                ? { lat: selectedJob.end_lat, lon: selectedJob.end_lon, label: selectedJob.end_address_label }
+                : null,
             stops: ordered.map((s) => ({ lat: s.lat, lon: s.lon, label: s.address_label, seq: s.sequence_index + 1 })),
           },
         ]
@@ -86,6 +94,11 @@ export default function AssignmentsPage() {
                     <div>
                       <div className="list-row-title">Job {j.job_id.slice(0, 8)}</div>
                       <div className="list-row-sub">{j.stop_count} stops</div>
+                      {j.start_address_label && (
+                        <div className="list-row-sub">
+                          {j.start_address_label} → {j.end_address_label}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -109,7 +122,7 @@ export default function AssignmentsPage() {
 
           <div>
             {selectedJob && mapRoutes.length > 0 ? (
-              <RouteMap depot={{ lat: selectedJob.depot_lat, lon: selectedJob.depot_lon }} routes={mapRoutes} />
+              <RouteMap routes={mapRoutes} />
             ) : (
               <div className="card empty">
                 <div className="empty-icon">📍</div>

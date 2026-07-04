@@ -2,10 +2,9 @@
 routing engine for the time matrix. Coordinates are real Tel Aviv locations
 so OSRM can snap them to the road network.
 """
-from tests.integration.conftest import login, register_user
+from tests.integration.conftest import login, register_user, set_courier_locations
 
 # Real Tel Aviv-area coordinates (lat, lon) so OSRM returns real travel times.
-DEPOT = (32.0853, 34.7818)  # central Tel Aviv
 STOPS = [
     (32.0733, 34.7925),  # Florentin
     (32.1093, 34.8555),  # Ramat Gan
@@ -31,6 +30,10 @@ def test_manager_courier_full_workflow(client, unique_suffix):
     assert r.status_code == 200
     assert r.json()["country"] == "IL"
 
+    # Courier onboarding: set start/end locations (applies instantly — no manager yet)
+    r = set_courier_locations(client, cour)
+    assert r["applied"] is True
+
     # Invite + accept
     r = client.post("/managers/me/invites", json={"courier_username": cour_name}, headers=mgr)
     assert r.status_code == 201
@@ -43,12 +46,10 @@ def test_manager_courier_full_workflow(client, unique_suffix):
     assert r.status_code == 200
     assert any(c["id"] == courier_id for c in r.json())
 
-    # Create job
+    # Create job — courier start/end are copied from their profile (copy-on-assign)
     r = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [
                 {"courier_id": courier_id, "start_time_seconds": 0, "end_time_seconds": 10 * 3600}
@@ -114,14 +115,13 @@ def test_authorization_boundary_other_courier_cannot_read(client, unique_suffix)
     other = login(client, other_name)
 
     client.patch("/users/me", json={"country": "il"}, headers=mgr)
+    set_courier_locations(client, cour)
     invite = client.post("/managers/me/invites", json={"courier_username": cour_name}, headers=mgr).json()
     client.post(f"/couriers/me/invites/{invite['id']}/accept", headers=cour)
 
     job_id = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [
                 {"courier_id": courier["id"], "start_time_seconds": 0, "end_time_seconds": 10 * 3600}
@@ -156,7 +156,7 @@ def test_manager_role_boundary(client, unique_suffix):
     # Courier hitting a manager-only route -> 403.
     r = client.post(
         "/jobs",
-        json={"depot_lat": DEPOT[0], "depot_lon": DEPOT[1], "delivery_date": "2026-07-06", "couriers": []},
+        json={"delivery_date": "2026-07-06", "couriers": []},
         headers=cour,
     )
     assert r.status_code == 403
@@ -172,6 +172,7 @@ def test_ui_read_endpoints(client, unique_suffix):
     cour = login(client, cour_name)
 
     client.patch("/users/me", json={"country": "il"}, headers=mgr)
+    set_courier_locations(client, cour)
     invite = client.post("/managers/me/invites", json={"courier_username": cour_name}, headers=mgr).json()
     client.post(f"/couriers/me/invites/{invite['id']}/accept", headers=cour)
 
@@ -183,8 +184,6 @@ def test_ui_read_endpoints(client, unique_suffix):
     job_id = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [
                 {"courier_id": courier["id"], "start_time_seconds": 0, "end_time_seconds": 10 * 3600}
@@ -208,13 +207,15 @@ def test_ui_read_endpoints(client, unique_suffix):
     assert summary["delivery_date"] == "2026-07-06"
 
     detail = client.get(f"/jobs/{job_id}", headers=mgr).json()
-    assert detail["depot_lat"] == DEPOT[0]
     assert detail["delivery_date"] == "2026-07-06"
     assert len(client.get(f"/jobs/{job_id}/stops", headers=mgr).json()) == 3
 
+    # The day carries the courier's copied start/end terminals.
     job_couriers = client.get(f"/jobs/{job_id}/couriers", headers=mgr).json()
     assert job_couriers[0]["username"] == cour_name
     assert "job_courier_id" in job_couriers[0]
+    assert job_couriers[0]["start_address_label"] == "Courier start, central TLV"
+    assert job_couriers[0]["end_address_label"] == "Courier end, central TLV"
 
     # Generate + publish, then the courier's job list should include it.
     option = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()

@@ -30,8 +30,9 @@ class BruteForceExactAlgorithm(RoutingAlgorithmBase):
         n = len(stops)
         k = len(couriers)
         tm = instance.time_matrix
-        stop_index_by_id = {sid: i + 1 for i, sid in enumerate(tm.stop_ids)}
-        matrix_idx = [stop_index_by_id[s.id] for s in stops]
+        matrix_idx = [tm.stop_index(s.id) for s in stops]
+        start_idx = [tm.start_index(c.id) for c in couriers]
+        end_idx = [tm.end_index(c.id) for c in couriers]
         dist = tm.matrix
         service_times = [s.service_time_seconds for s in stops]
         service_by_id = {s.id: s.service_time_seconds for s in stops}
@@ -39,7 +40,7 @@ class BruteForceExactAlgorithm(RoutingAlgorithmBase):
 
         if n == 0:
             routes = tuple(
-                self._route_from_order(c.id, (), stop_index_by_id, service_by_id, tm)
+                self._route_from_order(c, (), service_by_id, tm)
                 for c in couriers
             )
             return SolutionResult(
@@ -61,22 +62,22 @@ class BruteForceExactAlgorithm(RoutingAlgorithmBase):
                 feasible=False,
             )
 
-        def route_travel(order: tuple[int, ...]) -> float:
+        def route_travel(order: tuple[int, ...], c: int) -> float:
             if not order:
                 return 0.0
-            total = dist[0][matrix_idx[order[0]]]
+            total = dist[start_idx[c]][matrix_idx[order[0]]]
             for a, b in zip(order, order[1:]):
                 total += dist[matrix_idx[a]][matrix_idx[b]]
-            total += dist[matrix_idx[order[-1]]][0]
+            total += dist[matrix_idx[order[-1]]][end_idx[c]]
             return total
 
-        def best_order_for_subset(subset: tuple[int, ...]) -> tuple[float, tuple[int, ...]]:
+        def best_order_for_subset(subset: tuple[int, ...], c: int) -> tuple[float, tuple[int, ...]]:
             if not subset:
                 return 0.0, ()
             best_travel = None
             best_order: tuple[int, ...] = ()
             for perm in itertools.permutations(subset):
-                t = route_travel(perm)
+                t = route_travel(perm, c)
                 if best_travel is None or t < best_travel:
                     best_travel = t
                     best_order = perm
@@ -95,9 +96,9 @@ class BruteForceExactAlgorithm(RoutingAlgorithmBase):
             feasible = True
             for c in range(k):
                 subset = tuple(groups[c])
-                travel, order = best_order_for_subset(subset)
+                travel, order = best_order_for_subset(subset, c)
                 service = sum(service_times[i] for i in subset)
-                if travel + service > windows[c]:
+                if subset and travel + service > windows[c]:
                     feasible = False
                     break
                 total += travel + service
@@ -121,9 +122,8 @@ class BruteForceExactAlgorithm(RoutingAlgorithmBase):
 
         routes = tuple(
             self._route_from_order(
-                couriers[c].id,
+                couriers[c],
                 tuple(stops[i].id for i in order),
-                stop_index_by_id,
                 service_by_id,
                 tm,
             )

@@ -36,10 +36,6 @@ class Job(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     manager_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
-    depot_lat: Mapped[float] = mapped_column(Float, nullable=False)
-    depot_lon: Mapped[float] = mapped_column(Float, nullable=False)
-    # Nullable: jobs created before this column existed have no label.
-    depot_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Nullable at the DB level so this migration is safe against any existing
     # rows; the API requires it on creation via JobCreateRequest instead.
     delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -77,6 +73,16 @@ class JobCourier(Base):
     courier_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     start_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     end_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    # This day's route terminals for this courier — copied from the courier's
+    # profile defaults at assignment time (copy-on-assign) and editable per
+    # day; profile changes never rewrite these. Nullable only for rows that
+    # predate the column (legacy depot-era days).
+    start_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    end_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_address_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="couriers", foreign_keys=[job_id])
 

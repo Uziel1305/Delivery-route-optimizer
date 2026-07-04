@@ -26,12 +26,25 @@ def test_city_suggest_requires_country(client, unique_suffix):
     assert r.status_code == 400
 
 
-def test_city_suggest_requires_manager_role(client, unique_suffix):
+def test_city_suggest_allows_couriers(client, unique_suffix):
+    # Couriers geocode their own start/end locations, so any authenticated
+    # user may query (still country-gated); anonymous requests are rejected.
     name = f"geocour_{unique_suffix}"
     register_user(client, name, "courier")
     headers = login(client, name)
+
     r = client.get("/geocoding/suggest/cities", params={"q": "Tel"}, headers=headers)
-    assert r.status_code == 403
+    assert r.status_code == 400  # authenticated but no country set yet
+
+    client.patch("/users/me", json={"country": "il"}, headers=headers)
+    try:
+        r = client.get("/geocoding/suggest/cities", params={"q": "Tel"}, headers=headers, timeout=20.0)
+    except httpx.HTTPError as exc:
+        pytest.skip(f"Photon unreachable: {exc}")
+    assert r.status_code == 200
+
+    r = client.get("/geocoding/suggest/cities", params={"q": "Tel"})
+    assert r.status_code == 401
 
 
 def test_city_suggest_returns_results(client, manager_headers):

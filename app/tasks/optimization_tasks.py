@@ -5,8 +5,12 @@ from app.database import SessionLocal
 from app.jobs.models import CourierCountMode, Job, JobCourier, JobStatus, JobStop, Option
 from app.optimization import solver
 from app.optimization.matrix.osrm_provider import OsrmTimeMatrixProvider
-from app.optimization.models import Coordinate, Depot, Stop
-from app.services.optimization_adapter import build_problem_instance, persist_solution
+from app.services.optimization_adapter import (
+    build_opt_couriers,
+    build_opt_stops,
+    build_problem_instance,
+    persist_solution,
+)
 from app.tasks.celery_app import celery_app
 
 settings = get_settings()
@@ -23,20 +27,18 @@ def run_generation(
     dispatch to a worker if request-time solve times become too long.
 
     Returns None if infeasible for the requested courier_count (or, when
-    courier_count is None, infeasible with the full pool).
+    courier_count is None, infeasible with the full pool). Raises
+    MissingCourierLocations for legacy days whose couriers have no terminals.
     """
     job_couriers = db.query(JobCourier).filter(JobCourier.job_id == job.id).all()
     active_stops = db.query(JobStop).filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None)).all()
 
-    depot = Depot(coordinate=Coordinate(lat=job.depot_lat, lon=job.depot_lon))
-    opt_stops = tuple(
-        Stop(id=s.id, coordinate=Coordinate(lat=s.lat, lon=s.lon), service_time_seconds=s.service_time_seconds)
-        for s in active_stops
-    )
+    opt_couriers = build_opt_couriers(job_couriers)
+    opt_stops = build_opt_stops(active_stops)
     matrix_provider = OsrmTimeMatrixProvider(base_url=settings.osrm_base_url)
-    time_matrix = matrix_provider.get_matrix(depot, opt_stops)
+    time_matrix = matrix_provider.get_matrix(opt_couriers, opt_stops)
 
-    instance = build_problem_instance(job, job_couriers, active_stops, time_matrix)
+    instance = build_problem_instance(job_couriers, active_stops, time_matrix)
 
     if courier_count is None:
         result = solver.solve(instance)
@@ -51,7 +53,9 @@ def run_generation(
         if result is None:
             return None
 
-    option = persist_solution(db, job, requested_n, mode, result, active_stops, parent_option_id=parent_option_id)
+    option = persist_solution(
+        db, job, requested_n, mode, result, active_stops, job_couriers, parent_option_id=parent_option_id
+    )
 
     job.status = JobStatus.OPTIONS_READY
     db.commit()

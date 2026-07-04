@@ -26,7 +26,7 @@ def test_solve_with_courier_count_rejects_out_of_range_n():
 def test_reorder_single_route_matches_exact_optimum():
     instance = generate_synthetic_instance(6, 1, seed=9, courier_window_seconds=8 * 3600)
     courier = instance.couriers[0]
-    reordered = solver.reorder_single_route(courier, instance.stops, instance.depot, instance.time_matrix)
+    reordered = solver.reorder_single_route(courier, instance.stops, instance.time_matrix)
     assert reordered is not None
     assert set(reordered.ordered_stop_ids) == {s.id for s in instance.stops}
 
@@ -34,5 +34,5 @@ def test_reorder_single_route_matches_exact_optimum():
 def test_reorder_single_route_infeasible_returns_none():
     instance = generate_synthetic_instance(6, 1, seed=9, courier_window_seconds=1)
     courier = instance.couriers[0]
-    reordered = solver.reorder_single_route(courier, instance.stops, instance.depot, instance.time_matrix)
+    reordered = solver.reorder_single_route(courier, instance.stops, instance.time_matrix)
     assert reordered is None

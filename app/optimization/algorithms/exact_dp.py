@@ -1,13 +1,16 @@
-"""OPTIMAL tier: a shared Held-Karp DP (Phase 1) feeding a set-partition DP
+"""OPTIMAL tier: per-courier Held-Karp DP (Phase 1) feeding a set-partition DP
 over couriers (Phase 2).
 
-Phase 1 computes route_cost[S] — the optimal single-vehicle round-trip travel
-cost for every possible subset S of stops — in a single O(n^2 * 2^n) pass,
-rather than re-running Held-Karp once per courier-subset.
+Every courier has their own start/end terminals, so Phase 1 computes
+route_cost[courier][S] — the optimal start -> S -> end path cost for every
+subset S of stops, once per courier — in O(k * n^2 * 2^n). (With a shared
+depot this table used to be courier-independent; per-courier terminals make
+that impossible.)
 
-Phase 2 partitions the full stop set across couriers using that lookup table:
-best[c][S] = min cost to cover exactly S using the first c couriers, subject
-to each courier's time window. O(3^n * k).
+Phase 2 partitions the full stop set across couriers using those lookup
+tables: best[c][S] = min cost to cover exactly S using the first c couriers,
+subject to each courier's time window. O(3^n * k). A courier assigned no
+stops drives nothing and costs zero.
 
 See held_karp_single_route() for the separate, simpler exact solver used by
 solver.reorder_single_route() to reorder one courier's already-decided stop
@@ -21,8 +24,8 @@ from app.optimization.base import RoutingAlgorithmBase
 from app.optimization.config import DEFAULT_CONFIG
 from app.optimization.models import (
     AlgorithmTier,
+    Courier,
     CourierRoute,
-    Depot,
     ProblemInstance,
     RouteLeg,
     SolutionResult,
@@ -35,13 +38,17 @@ INF = math.inf
 
 
 def _build_local_matrix(
-    stops: tuple[Stop, ...], time_matrix: TimeMatrix
+    courier: Courier, stops: tuple[Stop, ...], time_matrix: TimeMatrix
 ) -> list[list[float]]:
-    """Reindex the global TimeMatrix to a local (n+1)x(n+1) matrix where
-    local index 0 is the depot and local index i+1 is stops[i].
+    """Reindex the global TimeMatrix to a local (n+2)x(n+2) matrix where
+    local index 0 is the courier's start, i+1 is stops[i], and n+1 is the
+    courier's end.
     """
-    stop_index_by_id = {sid: i + 1 for i, sid in enumerate(time_matrix.stop_ids)}
-    global_indices = [0] + [stop_index_by_id[s.id] for s in stops]
+    global_indices = (
+        [time_matrix.start_index(courier.id)]
+        + [time_matrix.stop_index(s.id) for s in stops]
+        + [time_matrix.end_index(courier.id)]
+    )
     size = len(global_indices)
     return [
         [time_matrix.matrix[global_indices[a]][global_indices[b]] for b in range(size)]
@@ -52,13 +59,16 @@ def _build_local_matrix(
 def _compute_route_cost_table(
     n: int, dist_local: list[list[float]]
 ) -> tuple[list[float], list[list[float]], list[list[int]], list[int]]:
-    """Held-Karp over all n stops. Returns (route_cost, dp, parent, best_last_for_mask).
+    """Held-Karp over all n stops for one courier's local matrix.
+    Returns (route_cost, dp, parent, best_last_for_mask).
 
-    dp[mask][j] = min travel cost of a depot-started path visiting exactly
+    dp[mask][j] = min travel cost of a start-anchored path visiting exactly
     the local stops in `mask`, ending at local stop j.
-    route_cost[mask] = optimal depot round-trip travel cost for that subset.
+    route_cost[mask] = optimal start -> mask -> end travel cost for that
+    subset (0.0 for the empty subset — an idle courier drives nothing).
     """
     size = 1 << n
+    end_local = n + 1
     dp = [[INF] * n for _ in range(size)]
     parent = [[-1] * n for _ in range(size)]
 
@@ -90,7 +100,7 @@ def _compute_route_cost_table(
         for j in range(n):
             if not (mask & (1 << j)) or dp[mask][j] == INF:
                 continue
-            cost = dp[mask][j] + dist_local[j + 1][0]
+            cost = dp[mask][j] + dist_local[j + 1][end_local]
             if cost < best_cost:
                 best_cost = cost
                 best_j = j
@@ -130,16 +140,61 @@ def _reconstruct_order(
     return order
 
 
+def _route_from_local_order(
+    courier_id: str,
+    order_local: list[int],
+    stops: tuple[Stop, ...],
+    dist_local: list[list[float]],
+) -> CourierRoute:
+    """Build a CourierRoute from a local stop order against one courier's
+    local matrix (0 = start, n+1 = end). Empty order = idle courier: no legs.
+    """
+    if not order_local:
+        return CourierRoute(
+            courier_id=courier_id,
+            ordered_stop_ids=(),
+            legs=(),
+            total_travel_seconds=0.0,
+            total_service_seconds=0.0,
+        )
+
+    end_local = len(stops) + 1
+    legs: list[RouteLeg] = []
+    prev_a = 0
+    prev_stop_id: str | None = None
+    travel_total = 0.0
+    for i in order_local:
+        a = i + 1
+        travel = dist_local[prev_a][a]
+        legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=stops[i].id, travel_seconds=travel))
+        travel_total += travel
+        prev_a = a
+        prev_stop_id = stops[i].id
+    travel_out = dist_local[prev_a][end_local]
+    legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=None, travel_seconds=travel_out))
+    travel_total += travel_out
+
+    service_total = sum(stops[i].service_time_seconds for i in order_local)
+    return CourierRoute(
+        courier_id=courier_id,
+        ordered_stop_ids=tuple(stops[i].id for i in order_local),
+        legs=tuple(legs),
+        total_travel_seconds=travel_total,
+        total_service_seconds=service_total,
+    )
+
+
 def _set_partition_dp(
     n: int,
     k: int,
-    route_cost: list[float],
+    route_costs: list[list[float]],
     service_sum: list[float],
     windows: list[int],
 ) -> tuple[list[list[float]], list[list[int]]]:
     """best[c][S] = min total (travel+service) cost to cover exactly S using
-    the first c couriers (in the order given). choice[c][S] = the subset
-    assigned to courier c-1 achieving that optimum, for reconstruction.
+    the first c couriers (in the order given), with courier c-1's own
+    route_costs table. choice[c][S] = the subset assigned to courier c-1
+    achieving that optimum, for reconstruction.
     """
     size = 1 << n
     best = [[INF] * size for _ in range(k + 1)]
@@ -148,6 +203,7 @@ def _set_partition_dp(
 
     for c in range(1, k + 1):
         window = windows[c - 1]
+        route_cost = route_costs[c - 1]
         prev_best = best[c - 1]
         for s in range(size):
             best_val = INF
@@ -172,85 +228,70 @@ def _set_partition_dp(
 
 def held_karp_single_route(
     stops: tuple[Stop, ...],
-    depot: Depot,
-    courier_id: str,
-    window_seconds: int,
+    courier: Courier,
     time_matrix: TimeMatrix,
 ) -> CourierRoute | None:
-    """Optimal ordering of exactly `stops` for one vehicle.
+    """Optimal ordering of exactly `stops` for one courier, from their start
+    terminal to their end terminal.
 
-    Returns None if no ordering fits within `window_seconds` (travel + service
-    combined). Used by solver.reorder_single_route() after a manager swaps a
-    stop between couriers — a single-subset exact solve, distinct from the
-    whole-instance route_cost table above.
+    Returns None if no ordering fits within the courier's window (travel +
+    service combined). Used by solver.reorder_single_route() after a manager
+    swaps a stop between couriers — a single-subset exact solve, distinct
+    from the whole-instance route_cost tables above.
     """
     n = len(stops)
     total_service = sum(s.service_time_seconds for s in stops)
 
     if n == 0:
-        if total_service > window_seconds:
-            return None
         return CourierRoute(
-            courier_id=courier_id,
+            courier_id=courier.id,
             ordered_stop_ids=(),
             legs=(),
             total_travel_seconds=0.0,
             total_service_seconds=0.0,
         )
 
-    dist_local = _build_local_matrix(stops, time_matrix)
+    dist_local = _build_local_matrix(courier, stops, time_matrix)
     route_cost, dp, parent, best_last_for_mask = _compute_route_cost_table(n, dist_local)
 
     full_mask = (1 << n) - 1
     best_travel = route_cost[full_mask]
-    if best_travel == INF or best_travel + total_service > window_seconds:
+    if best_travel == INF or best_travel + total_service > courier.window_seconds:
         return None
 
     order_local = _reconstruct_order(full_mask, dp, parent, best_last_for_mask)
-    ordered_stop_ids = tuple(stops[i].id for i in order_local)
+    return _route_from_local_order(courier.id, order_local, stops, dist_local)
 
-    legs: list[RouteLeg] = []
-    prev_a = 0
-    prev_stop_id: str | None = None
-    travel_total = 0.0
-    for i in order_local:
-        a = i + 1
-        travel = dist_local[prev_a][a]
-        legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=stops[i].id, travel_seconds=travel))
-        travel_total += travel
-        prev_a = a
-        prev_stop_id = stops[i].id
-    travel_back = dist_local[prev_a][0]
-    legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=None, travel_seconds=travel_back))
-    travel_total += travel_back
 
-    return CourierRoute(
-        courier_id=courier_id,
-        ordered_stop_ids=ordered_stop_ids,
-        legs=tuple(legs),
-        total_travel_seconds=travel_total,
-        total_service_seconds=total_service,
-    )
+class _CourierTables:
+    """Phase-1 results for one courier against the instance's stop set."""
+
+    __slots__ = ("dist_local", "route_cost", "dp", "parent", "best_last_for_mask")
+
+    def __init__(self, courier: Courier, stops: tuple[Stop, ...], time_matrix: TimeMatrix, n: int):
+        self.dist_local = _build_local_matrix(courier, stops, time_matrix)
+        self.route_cost, self.dp, self.parent, self.best_last_for_mask = _compute_route_cost_table(
+            n, self.dist_local
+        )
 
 
 class SharedTables:
-    """Phase-1 results for one instance's stop set — independent of which
-    couriers are used. Computed once per generation and reused across every
-    courier-subset evaluated by solve_for_couriers() (e.g. "try with N
-    couriers" enumerating C(M,N) subsets).
+    """Phase-1 results for every courier in the instance. Computed once per
+    generation and reused across every courier-subset evaluated by
+    solve_for_couriers() (e.g. "try with N couriers" enumerating C(M,N)
+    subsets — each courier's table is courier-specific but subset-independent).
     """
 
-    __slots__ = ("n", "dist_local", "route_cost", "dp", "parent", "best_last_for_mask", "service_times", "service_sum")
+    __slots__ = ("n", "service_times", "service_sum", "by_courier_id")
 
     def __init__(self, instance: ProblemInstance):
         stops = instance.stops
         self.n = len(stops)
-        self.dist_local = _build_local_matrix(stops, instance.time_matrix)
-        self.route_cost, self.dp, self.parent, self.best_last_for_mask = _compute_route_cost_table(
-            self.n, self.dist_local
-        )
         self.service_times = [s.service_time_seconds for s in stops]
         self.service_sum = _service_sum_table(self.n, self.service_times)
+        self.by_courier_id = {
+            c.id: _CourierTables(c, stops, instance.time_matrix, self.n) for c in instance.couriers
+        }
 
 
 def prepare_shared_tables(instance: ProblemInstance) -> SharedTables:
@@ -299,9 +340,11 @@ def solve_for_couriers(
         return None
 
     windows = [c.window_seconds for c in couriers]
+    tables = [shared.by_courier_id[c.id] for c in couriers]
+    route_costs = [t.route_cost for t in tables]
     full_mask = (1 << n) - 1
 
-    best, choice = _set_partition_dp(n, k, shared.route_cost, shared.service_sum, windows)
+    best, choice = _set_partition_dp(n, k, route_costs, shared.service_sum, windows)
     total_cost = best[k][full_mask]
     if total_cost == INF:
         return None
@@ -318,35 +361,9 @@ def solve_for_couriers(
     routes = []
     for idx, courier in enumerate(couriers):
         mask = masks_by_courier[idx]
-        order_local = _reconstruct_order(mask, shared.dp, shared.parent, shared.best_last_for_mask)
-        ordered_stop_ids = tuple(stops[i].id for i in order_local)
-
-        legs: list[RouteLeg] = []
-        prev_a = 0
-        prev_stop_id: str | None = None
-        travel_total = 0.0
-        for i in order_local:
-            a = i + 1
-            travel = shared.dist_local[prev_a][a]
-            legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=stops[i].id, travel_seconds=travel))
-            travel_total += travel
-            prev_a = a
-            prev_stop_id = stops[i].id
-        if order_local:
-            travel_back = shared.dist_local[prev_a][0]
-            legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=None, travel_seconds=travel_back))
-            travel_total += travel_back
-
-        service_total = sum(shared.service_times[i] for i in order_local)
-        routes.append(
-            CourierRoute(
-                courier_id=courier.id,
-                ordered_stop_ids=ordered_stop_ids,
-                legs=tuple(legs),
-                total_travel_seconds=travel_total,
-                total_service_seconds=service_total,
-            )
-        )
+        ct = tables[idx]
+        order_local = _reconstruct_order(mask, ct.dp, ct.parent, ct.best_last_for_mask)
+        routes.append(_route_from_local_order(courier.id, order_local, stops, ct.dist_local))
 
     total_duration = sum(r.total_duration_seconds for r in routes)
     return SolutionResult(

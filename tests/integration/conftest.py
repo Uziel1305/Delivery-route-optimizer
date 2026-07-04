@@ -60,3 +60,23 @@ def login(client: httpx.Client, username: str) -> dict:
     resp.raise_for_status()
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+# Real Tel Aviv-area coordinates so OSRM can snap them to the road network.
+DEFAULT_COURIER_LOCATIONS = {
+    "start_lat": 32.0853,
+    "start_lon": 34.7818,
+    "start_address_label": "Courier start, central TLV",
+    "end_lat": 32.0800,
+    "end_lon": 34.7800,
+    "end_address_label": "Courier end, central TLV",
+}
+
+
+def set_courier_locations(client: httpx.Client, headers: dict, locations: dict | None = None) -> dict:
+    """Onboarding step: give a courier their default start/end terminals.
+    Must run before the courier can be added to a delivery day.
+    """
+    resp = client.put("/couriers/me/locations", json=locations or DEFAULT_COURIER_LOCATIONS, headers=headers)
+    resp.raise_for_status()
+    return resp.json()

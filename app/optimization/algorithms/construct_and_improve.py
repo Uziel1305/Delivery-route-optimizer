@@ -2,6 +2,10 @@
 local search (intra-route 2-opt, cross-route Or-opt relocation, and
 inter-route stop exchange) run to convergence.
 
+Every route is anchored to its own courier's start/end terminals, so all
+travel arithmetic is parameterized by courier index. An empty route costs
+zero (an idle courier drives nothing).
+
 Used for instances too large for the exact Held-Karp + set-partition DP in
 exact_dp.py (see AlgorithmConfig.optimal_tier_max_stops).
 """
@@ -22,47 +26,61 @@ EPSILON = 1e-9
 
 class _RouteOps:
     """Bundles the travel/service arithmetic needed by construction and
-    local search, closed over one instance's matrix and stop data.
+    local search, closed over one instance's matrix, stop data, and each
+    courier's terminal indices.
     """
 
     def __init__(self, instance: ProblemInstance):
         stops = instance.stops
         tm = instance.time_matrix
-        stop_index_by_id = {sid: i + 1 for i, sid in enumerate(tm.stop_ids)}
 
         self.stops = stops
         self.n = len(stops)
         self.dist = tm.matrix
-        self.matrix_idx = [stop_index_by_id[s.id] for s in stops]
+        self.matrix_idx = [tm.stop_index(s.id) for s in stops]
         self.service_times = [s.service_time_seconds for s in stops]
+        self.start_idx = [tm.start_index(c.id) for c in instance.couriers]
+        self.end_idx = [tm.end_index(c.id) for c in instance.couriers]
 
     def travel(self, a: int, b: int) -> float:
         return self.dist[a][b]
 
-    def route_travel_seconds(self, route: list[int]) -> float:
+    def route_travel_seconds(self, route: list[int], c: int) -> float:
         if not route:
             return 0.0
-        total = self.travel(0, self.matrix_idx[route[0]])
+        total = self.travel(self.start_idx[c], self.matrix_idx[route[0]])
         for a, b in zip(route, route[1:]):
             total += self.travel(self.matrix_idx[a], self.matrix_idx[b])
-        total += self.travel(self.matrix_idx[route[-1]], 0)
+        total += self.travel(self.matrix_idx[route[-1]], self.end_idx[c])
         return total
 
     def route_service_seconds(self, route: list[int]) -> float:
         return sum(self.service_times[i] for i in route)
 
-    def route_duration_seconds(self, route: list[int]) -> float:
-        return self.route_travel_seconds(route) + self.route_service_seconds(route)
+    def route_duration_seconds(self, route: list[int], c: int) -> float:
+        return self.route_travel_seconds(route, c) + self.route_service_seconds(route)
 
-    def marginal_insertion_cost(self, route: list[int], position: int, stop_local_idx: int) -> float:
+    def marginal_insertion_cost(self, route: list[int], position: int, stop_local_idx: int, c: int) -> float:
         s = self.matrix_idx[stop_local_idx]
-        prev = 0 if position == 0 else self.matrix_idx[route[position - 1]]
-        nxt = 0 if position == len(route) else self.matrix_idx[route[position]]
+        if not route:
+            # An idle route's true cost is 0, so the first insertion pays the
+            # full start -> stop -> end path (no "saved" start->end leg).
+            return self.travel(self.start_idx[c], s) + self.travel(s, self.end_idx[c])
+        prev = self.start_idx[c] if position == 0 else self.matrix_idx[route[position - 1]]
+        nxt = self.end_idx[c] if position == len(route) else self.matrix_idx[route[position]]
         return self.travel(prev, s) + self.travel(s, nxt) - self.travel(prev, nxt)
 
-    def to_courier_route(self, courier_id: str, route: list[int]) -> CourierRoute:
+    def to_courier_route(self, courier_id: str, route: list[int], c: int) -> CourierRoute:
+        if not route:
+            return CourierRoute(
+                courier_id=courier_id,
+                ordered_stop_ids=(),
+                legs=(),
+                total_travel_seconds=0.0,
+                total_service_seconds=0.0,
+            )
         legs: list[RouteLeg] = []
-        prev_a = 0
+        prev_a = self.start_idx[c]
         prev_stop_id: str | None = None
         travel_total = 0.0
         for i in route:
@@ -72,10 +90,9 @@ class _RouteOps:
             travel_total += travel
             prev_a = a
             prev_stop_id = self.stops[i].id
-        if route:
-            travel_back = self.travel(prev_a, 0)
-            legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=None, travel_seconds=travel_back))
-            travel_total += travel_back
+        travel_out = self.travel(prev_a, self.end_idx[c])
+        legs.append(RouteLeg(from_stop_id=prev_stop_id, to_stop_id=None, travel_seconds=travel_out))
+        travel_total += travel_out
 
         return CourierRoute(
             courier_id=courier_id,
@@ -101,9 +118,9 @@ def _construct_cheapest_insertion(
             for c in range(k):
                 route = routes[c]
                 for pos in range(len(route) + 1):
-                    cost = ops.marginal_insertion_cost(route, pos, i)
+                    cost = ops.marginal_insertion_cost(route, pos, i, c)
                     candidate = route[:pos] + [i] + route[pos:]
-                    if ops.route_duration_seconds(candidate) > windows[c]:
+                    if ops.route_duration_seconds(candidate, c) > windows[c]:
                         continue
                     if best is None or cost < best[0]:
                         best = (cost, i, c, pos)
@@ -117,7 +134,7 @@ def _construct_cheapest_insertion(
     return routes, unplaced
 
 
-def _two_opt_pass(ops: _RouteOps, route: list[int]) -> bool:
+def _two_opt_pass(ops: _RouteOps, route: list[int], c: int) -> bool:
     improved_any = False
     improved = True
     while improved:
@@ -126,7 +143,7 @@ def _two_opt_pass(ops: _RouteOps, route: list[int]) -> bool:
         for i in range(length - 1):
             for j in range(i + 1, length):
                 candidate = route[:i] + route[i : j + 1][::-1] + route[j + 1 :]
-                if ops.route_travel_seconds(candidate) < ops.route_travel_seconds(route) - EPSILON:
+                if ops.route_travel_seconds(candidate, c) < ops.route_travel_seconds(route, c) - EPSILON:
                     route[:] = candidate
                     improved = True
                     improved_any = True
@@ -149,15 +166,19 @@ def _or_opt_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) ->
                     base = remainder if c_to == c_from else routes[c_to]
                     for pos in range(len(base) + 1):
                         candidate = base[:pos] + segment + base[pos:]
-                        if ops.route_duration_seconds(candidate) > windows[c_to]:
+                        if ops.route_duration_seconds(candidate, c_to) > windows[c_to]:
                             continue
                         if c_to == c_from:
-                            delta = ops.route_travel_seconds(candidate) - ops.route_travel_seconds(route_from)
+                            delta = ops.route_travel_seconds(candidate, c_to) - ops.route_travel_seconds(
+                                route_from, c_from
+                            )
                         else:
                             delta = (
-                                ops.route_travel_seconds(candidate) - ops.route_travel_seconds(routes[c_to])
+                                ops.route_travel_seconds(candidate, c_to)
+                                - ops.route_travel_seconds(routes[c_to], c_to)
                             ) + (
-                                ops.route_travel_seconds(remainder) - ops.route_travel_seconds(route_from)
+                                ops.route_travel_seconds(remainder, c_from)
+                                - ops.route_travel_seconds(route_from, c_from)
                             )
                         if best_target is None or delta < best_target[0]:
                             best_target = (delta, c_to, pos, candidate)
@@ -183,13 +204,13 @@ def _exchange_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) 
                 for j in range(len(r2)):
                     new_r1 = r1[:i] + [r2[j]] + r1[i + 1 :]
                     new_r2 = r2[:j] + [r1[i]] + r2[j + 1 :]
-                    if ops.route_duration_seconds(new_r1) > windows[c1]:
+                    if ops.route_duration_seconds(new_r1, c1) > windows[c1]:
                         continue
-                    if ops.route_duration_seconds(new_r2) > windows[c2]:
+                    if ops.route_duration_seconds(new_r2, c2) > windows[c2]:
                         continue
                     delta = (
-                        ops.route_travel_seconds(new_r1) + ops.route_travel_seconds(new_r2)
-                    ) - (ops.route_travel_seconds(r1) + ops.route_travel_seconds(r2))
+                        ops.route_travel_seconds(new_r1, c1) + ops.route_travel_seconds(new_r2, c2)
+                    ) - (ops.route_travel_seconds(r1, c1) + ops.route_travel_seconds(r2, c2))
                     if delta < -EPSILON:
                         routes[c1] = new_r1
                         routes[c2] = new_r2
@@ -201,8 +222,8 @@ def _improve_to_convergence(ops: _RouteOps, routes: list[list[int]], windows: li
     improved = True
     while improved:
         improved = False
-        for route in routes:
-            if _two_opt_pass(ops, route):
+        for c, route in enumerate(routes):
+            if _two_opt_pass(ops, route, c):
                 improved = True
         if _or_opt_pass(ops, routes, windows):
             improved = True
@@ -230,7 +251,7 @@ class CheapestInsertion2OptAlgorithm(RoutingAlgorithmBase):
         if ops.n == 0 or k == 0:
             unassigned = tuple(s.id for s in instance.stops) if k == 0 and ops.n > 0 else ()
             routes = tuple(
-                ops.to_courier_route(c.id, []) for c in couriers
+                ops.to_courier_route(couriers[c].id, [], c) for c in range(k)
             ) if k > 0 else ()
             return SolutionResult(
                 routes=routes,
@@ -245,7 +266,7 @@ class CheapestInsertion2OptAlgorithm(RoutingAlgorithmBase):
         _improve_to_convergence(ops, routes, windows)
 
         courier_routes = tuple(
-            ops.to_courier_route(couriers[c].id, routes[c]) for c in range(k)
+            ops.to_courier_route(couriers[c].id, routes[c], c) for c in range(k)
         )
         total_duration = sum(r.total_duration_seconds for r in courier_routes)
 

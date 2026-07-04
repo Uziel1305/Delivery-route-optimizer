@@ -2,9 +2,8 @@
 option — the teardown has no FK cascades to lean on, so this exercises the
 manual child-row deletion order end to end. Against the live stack.
 """
-from tests.integration.conftest import login, register_user
+from tests.integration.conftest import login, register_user, set_courier_locations
 
-DEPOT = (32.0853, 34.7818)
 STOPS = [
     (32.0733, 34.7925),  # Florentin
     (32.1093, 34.8555),  # Ramat Gan
@@ -16,8 +15,6 @@ def _create_job(client, mgr, courier_id):
     r = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [
                 {"courier_id": courier_id, "start_time_seconds": 0, "end_time_seconds": 10 * 3600}
@@ -38,6 +35,7 @@ def test_delete_published_job_full_teardown(client, unique_suffix):
     cour = login(client, cour_name)
 
     client.patch("/users/me", json={"country": "il"}, headers=mgr)
+    set_courier_locations(client, cour)
     invite = client.post("/managers/me/invites", json={"courier_username": cour_name}, headers=mgr).json()
     client.post(f"/couriers/me/invites/{invite['id']}/accept", headers=cour)
 
@@ -82,6 +80,7 @@ def test_delete_job_authorization_and_draft(client, unique_suffix):
     cour = login(client, cour_name)
 
     client.patch("/users/me", json={"country": "il"}, headers=owner)
+    set_courier_locations(client, cour)
     invite = client.post("/managers/me/invites", json={"courier_username": cour_name}, headers=owner).json()
     client.post(f"/couriers/me/invites/{invite['id']}/accept", headers=cour)
 

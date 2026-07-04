@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import RouteMap, { ROUTE_COLORS } from "../../components/RouteMap";
+import LocationPairForm from "../../components/LocationPairForm";
 import { Icon } from "../../components/icons";
 import { formatDate, formatDateTime, formatDuration, statusBadgeClass } from "../../utils/format";
 
@@ -22,6 +23,8 @@ export default function JobDetailPage() {
   const [savedLocations, setSavedLocations] = useState([]);
   const [checkedLocationIds, setCheckedLocationIds] = useState({});
   const [addingFromLocations, setAddingFromLocations] = useState(false);
+  const [editingCourier, setEditingCourier] = useState(null); // JobCourierOut being edited for this day
+  const [savingCourierLocations, setSavingCourierLocations] = useState(false);
 
   const stopById = useMemo(() => Object.fromEntries(stops.map((s) => [s.id, s])), [stops]);
   const courierById = useMemo(
@@ -137,6 +140,23 @@ export default function JobDetailPage() {
     }
   }
 
+  async function saveCourierDayLocations(payload) {
+    setError(null);
+    setNotice(null);
+    setSavingCourierLocations(true);
+    try {
+      await api.put(`/jobs/${jobId}/couriers/${editingCourier.job_courier_id}/locations`, payload);
+      setEditingCourier(null);
+      await loadCore();
+      setNotice("Locations updated for this day only. Existing options went stale — regenerate to use them.");
+    } catch (err) {
+      const d = err instanceof ApiError ? err.detail : null;
+      setError(typeof d === "string" ? d : "Could not update the courier's locations for this day.");
+    } finally {
+      setSavingCourierLocations(false);
+    }
+  }
+
   async function publish() {
     setError(null);
     try {
@@ -152,20 +172,32 @@ export default function JobDetailPage() {
   if (loading) return <div className="loading-center"><div className="spinner" /> Loading job…</div>;
   if (!job) return null;
 
-  // Build map routes from the selected option.
+  // Build map routes from the selected option; each route carries its own
+  // courier's start/end terminals for the day.
   const mapRoutes = selectedOption
     ? selectedOption.courier_routes
         .filter((r) => r.stops.length > 0)
-        .map((r, i) => ({
-          color: ROUTE_COLORS[i % ROUTE_COLORS.length],
-          label: courierById[r.job_courier_id]?.username || "Courier",
-          stops: r.stops
-            .map((s) => {
-              const st = stopById[s.job_stop_id];
-              return st ? { lat: st.lat, lon: st.lon, label: st.address_label, seq: s.sequence_index + 1 } : null;
-            })
-            .filter(Boolean),
-        }))
+        .map((r, i) => {
+          const courier = courierById[r.job_courier_id];
+          return {
+            color: ROUTE_COLORS[i % ROUTE_COLORS.length],
+            label: courier?.username || "Courier",
+            start:
+              courier?.start_lat != null
+                ? { lat: courier.start_lat, lon: courier.start_lon, label: courier.start_address_label }
+                : null,
+            end:
+              courier?.end_lat != null
+                ? { lat: courier.end_lat, lon: courier.end_lon, label: courier.end_address_label }
+                : null,
+            stops: r.stops
+              .map((s) => {
+                const st = stopById[s.job_stop_id];
+                return st ? { lat: st.lat, lon: st.lon, label: st.address_label, seq: s.sequence_index + 1 } : null;
+              })
+              .filter(Boolean),
+          };
+        })
     : [];
 
   const editable = selectedOption && selectedOption.status === "active";
@@ -288,6 +320,34 @@ export default function JobDetailPage() {
               The optimizer minimizes total courier working time using live OSRM travel times.
             </div>
           </div>
+
+          <div className="card card-pad" style={{ marginTop: 20 }}>
+            <h3 style={{ marginBottom: 16 }}>Couriers on this day ({couriers.length})</h3>
+            {couriers.length === 0 ? (
+              <div className="empty" style={{ padding: 24 }}>No couriers assigned.</div>
+            ) : (
+              <div className="list">
+                {couriers.map((c) => (
+                  <div key={c.job_courier_id} className="stop-pill">
+                    <div style={{ flex: 1 }}>
+                      <strong>{c.username}</strong>
+                      <div className="list-row-sub">
+                        {c.start_address_label || "no start"} → {c.end_address_label || "no end"}
+                      </div>
+                    </div>
+                    {job.status !== "archived" && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditingCourier(c)}>
+                        Edit for this day
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="stat" style={{ marginTop: 8 }}>
+              Edits here apply to this delivery day only — the courier's saved defaults are untouched.
+            </div>
+          </div>
         </div>
 
         {/* RIGHT: options + map */}
@@ -329,7 +389,7 @@ export default function JobDetailPage() {
 
           {selectedOption && (
             <>
-              <RouteMap depot={{ lat: job.depot_lat, lon: job.depot_lon }} routes={mapRoutes} />
+              <RouteMap routes={mapRoutes} />
 
               <div style={{ marginTop: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -367,10 +427,10 @@ export default function JobDetailPage() {
                         </div>
                         <div className="route-group-body">
                           <div className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
-                            <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
+                            <span className="stop-index" style={{ background: "#0f172a" }}>▶</span>
                             <div style={{ flex: 1 }}>
-                              <strong>Depot</strong> <span className="stat">(start — can't be moved)</span>
-                              {job.depot_address_label && <div className="stat">{job.depot_address_label}</div>}
+                              <strong>Start</strong> <span className="stat">(can't be moved)</span>
+                              {courier?.start_address_label && <div className="stat">{courier.start_address_label}</div>}
                             </div>
                           </div>
 
@@ -408,10 +468,10 @@ export default function JobDetailPage() {
 
                           <div className="route-leg">{formatDuration(returnLegSeconds)} drive</div>
                           <div className="stop-pill" style={{ border: "none", padding: "4px 0" }}>
-                            <span className="stop-index" style={{ background: "#0f172a" }}>★</span>
+                            <span className="stop-index" style={{ background: "#0f172a" }}>⏹</span>
                             <div style={{ flex: 1 }}>
-                              <strong>Depot</strong> <span className="stat">(end — can't be moved)</span>
-                              {job.depot_address_label && <div className="stat">{job.depot_address_label}</div>}
+                              <strong>End</strong> <span className="stat">(can't be moved)</span>
+                              {courier?.end_address_label && <div className="stat">{courier.end_address_label}</div>}
                             </div>
                           </div>
                         </div>
@@ -434,6 +494,32 @@ export default function JobDetailPage() {
           )}
         </div>
       </div>
+
+      {editingCourier && (
+        <div className="modal-overlay" onClick={() => setEditingCourier(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="modal-title">
+              {editingCourier.username} — locations for {formatDate(job.delivery_date)}
+            </h2>
+            <div className="alert alert-info">
+              This changes where {editingCourier.username} starts and ends <strong>on this day only</strong>.
+              Their saved defaults stay as they are. Existing route options will go stale.
+            </div>
+            <LocationPairForm
+              onSave={saveCourierDayLocations}
+              busy={savingCourierLocations}
+              saveLabel="Save for this day"
+            />
+            <button
+              className="btn btn-ghost btn-block"
+              style={{ marginTop: 8 }}
+              onClick={() => setEditingCourier(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

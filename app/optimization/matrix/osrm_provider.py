@@ -4,7 +4,8 @@ import httpx
 
 from app.optimization.exceptions import OptimizationError
 from app.optimization.matrix.base import TimeMatrixProvider
-from app.optimization.models import Depot, Stop, TimeMatrix
+from app.optimization.matrix.points import build_points
+from app.optimization.models import Courier, Stop, TimeMatrix
 
 
 class OsrmMatrixError(OptimizationError):
@@ -22,9 +23,9 @@ class OsrmTimeMatrixProvider(TimeMatrixProvider):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
-    def get_matrix(self, depot: Depot, stops: tuple[Stop, ...]) -> TimeMatrix:
-        points = [depot.coordinate] + [s.coordinate for s in stops]
-        coords_param = ";".join(f"{p.lon},{p.lat}" for p in points)
+    def get_matrix(self, couriers: tuple[Courier, ...], stops: tuple[Stop, ...]) -> TimeMatrix:
+        point_ids, coordinates = build_points(couriers, stops)
+        coords_param = ";".join(f"{p.lon},{p.lat}" for p in coordinates)
         url = f"{self.base_url}/table/v1/driving/{coords_param}"
 
         response = httpx.get(
@@ -47,4 +48,4 @@ class OsrmTimeMatrixProvider(TimeMatrixProvider):
                 )
 
         matrix = tuple(tuple(float(cell) for cell in row) for row in durations)
-        return TimeMatrix(matrix=matrix, stop_ids=tuple(s.id for s in stops))
+        return TimeMatrix(matrix=matrix, point_ids=point_ids)

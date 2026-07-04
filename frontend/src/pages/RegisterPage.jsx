@@ -20,7 +20,7 @@ export default function RegisterPage() {
     try {
       const me = await register(form);
       if (me.role === "manager") navigate("/onboarding");
-      else navigate("/courier/assignments");
+      else navigate("/courier/onboarding");
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : null;
       setError(typeof detail === "string" ? detail : "Registration failed");

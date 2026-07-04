@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 
 from app.optimization.matrix.base import TimeMatrixProvider
-from app.optimization.models import Depot, Stop, TimeMatrix
+from app.optimization.matrix.points import build_points
+from app.optimization.models import Courier, Stop, TimeMatrix
 
 EARTH_RADIUS_METERS = 6_371_000
 
@@ -25,9 +26,9 @@ class EuclideanTimeMatrixProvider(TimeMatrixProvider):
     def __init__(self, average_speed_mps: float = 12.0):
         self.average_speed_mps = average_speed_mps
 
-    def get_matrix(self, depot: Depot, stops: tuple[Stop, ...]) -> TimeMatrix:
-        points = [depot.coordinate] + [s.coordinate for s in stops]
-        n = len(points)
+    def get_matrix(self, couriers: tuple[Courier, ...], stops: tuple[Stop, ...]) -> TimeMatrix:
+        point_ids, coordinates = build_points(couriers, stops)
+        n = len(coordinates)
         rows: list[tuple[float, ...]] = []
         for i in range(n):
             row = []
@@ -36,9 +37,9 @@ class EuclideanTimeMatrixProvider(TimeMatrixProvider):
                     row.append(0.0)
                 else:
                     meters = _haversine_meters(
-                        points[i].lat, points[i].lon, points[j].lat, points[j].lon
+                        coordinates[i].lat, coordinates[i].lon, coordinates[j].lat, coordinates[j].lon
                     )
                     row.append(meters / self.average_speed_mps)
             rows.append(tuple(row))
 
-        return TimeMatrix(matrix=tuple(rows), stop_ids=tuple(s.id for s in stops))
+        return TimeMatrix(matrix=tuple(rows), point_ids=point_ids)

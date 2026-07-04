@@ -11,6 +11,9 @@ import JobDetailPage from "./pages/manager/JobDetailPage";
 import DeliveryLocationsPage from "./pages/manager/DeliveryLocationsPage";
 import InvitesPage from "./pages/courier/InvitesPage";
 import AssignmentsPage from "./pages/courier/AssignmentsPage";
+import CourierOnboardingPage from "./pages/courier/CourierOnboardingPage";
+import MyLocationsPage from "./pages/courier/MyLocationsPage";
+import RequireCourierLocations from "./components/RequireCourierLocations";
 
 function HomeRedirect() {
   const { user, loading } = useAuth();
@@ -29,6 +32,14 @@ export default function App() {
         element={
           <ProtectedRoute role="manager">
             <OnboardingPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courier/onboarding"
+        element={
+          <ProtectedRoute role="courier">
+            <CourierOnboardingPage />
           </ProtectedRoute>
         }
       />
@@ -76,7 +87,9 @@ export default function App() {
           path="/courier/assignments"
           element={
             <ProtectedRoute role="courier">
-              <AssignmentsPage />
+              <RequireCourierLocations>
+                <AssignmentsPage />
+              </RequireCourierLocations>
             </ProtectedRoute>
           }
         />
@@ -84,7 +97,19 @@ export default function App() {
           path="/courier/invites"
           element={
             <ProtectedRoute role="courier">
-              <InvitesPage />
+              <RequireCourierLocations>
+                <InvitesPage />
+              </RequireCourierLocations>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/courier/locations"
+          element={
+            <ProtectedRoute role="courier">
+              <RequireCourierLocations>
+                <MyLocationsPage />
+              </RequireCourierLocations>
             </ProtectedRoute>
           }
         />

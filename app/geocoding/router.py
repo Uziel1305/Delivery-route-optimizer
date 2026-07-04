@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.auth.dependencies import require_role
-from app.auth.models import User, UserRole
+from app.auth.dependencies import get_current_user
+from app.auth.models import User
 from app.geocoding.client import PhotonError, extract_coordinate, extract_label, photon_client
 from app.geocoding.schemas import (
     FieldError,
@@ -41,8 +41,10 @@ def _city_matches(feature: dict, city: str) -> bool:
 
 
 @router.get("/suggest/cities", response_model=list[SuggestionOut])
-def suggest_cities(q: str, manager: User = Depends(require_role(UserRole.MANAGER))):
-    country = _require_country(manager)
+def suggest_cities(q: str, user: User = Depends(get_current_user)):
+    # Couriers need geocoding too (their start/end locations), so any
+    # authenticated user may query — never anonymous (public Photon proxy).
+    country = _require_country(user)
     features = _photon_search(q, countrycode=country, layers=["city", "district", "locality"])
     return [
         SuggestionOut(label=extract_label(f), lat=lat, lon=lon)
@@ -55,9 +57,9 @@ def suggest_cities(q: str, manager: User = Depends(require_role(UserRole.MANAGER
 def suggest_streets(
     q: str,
     city: str,
-    manager: User = Depends(require_role(UserRole.MANAGER)),
+    user: User = Depends(get_current_user),
 ):
-    country = _require_country(manager)
+    country = _require_country(user)
 
     city_features = _photon_search(
         city, countrycode=country, layers=["city", "district", "locality"], limit=1
@@ -87,7 +89,7 @@ def suggest_streets(
 @router.post("/validate", response_model=ValidateAddressResponse)
 def validate_address(
     payload: ValidateAddressRequest,
-    manager: User = Depends(require_role(UserRole.MANAGER)),
+    user: User = Depends(get_current_user),
 ):
     """Hard-block cascade: re-resolve city, then street within that city,
     then house number within that street. Whichever step fails determines
@@ -95,7 +97,7 @@ def validate_address(
     some regions — a small number of real addresses may be rejected, an
     accepted tradeoff for this design.
     """
-    country = _require_country(manager)
+    country = _require_country(user)
 
     city_features = _photon_search(
         payload.city, countrycode=country, layers=["city", "district", "locality"], limit=1

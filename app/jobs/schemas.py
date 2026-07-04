@@ -12,9 +12,6 @@ class JobCourierIn(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    depot_lat: float
-    depot_lon: float
-    depot_address_label: str | None = None
     delivery_date: date
     couriers: list[JobCourierIn]
 
@@ -32,8 +29,6 @@ class JobOut(BaseModel):
 class JobSummaryOut(BaseModel):
     id: str
     status: JobStatus
-    depot_lat: float
-    depot_lon: float
     published_option_id: str | None
     delivery_date: date | None
     stop_count: int
@@ -43,9 +38,6 @@ class JobSummaryOut(BaseModel):
 class JobDetailOut(BaseModel):
     id: str
     status: JobStatus
-    depot_lat: float
-    depot_lon: float
-    depot_address_label: str | None
     published_option_id: str | None
     delivery_date: date | None
 
@@ -56,13 +48,33 @@ class JobCourierOut(BaseModel):
     username: str
     start_time_seconds: int
     end_time_seconds: int
+    # This day's route terminals (copy-on-assign; nullable only on legacy rows).
+    start_lat: float | None
+    start_lon: float | None
+    start_address_label: str | None
+    end_lat: float | None
+    end_lon: float | None
+    end_address_label: str | None
+
+
+class JobCourierLocationsUpdateRequest(BaseModel):
+    """Day-only edit of one courier's route terminals on this delivery day."""
+    start_lat: float
+    start_lon: float
+    start_address_label: str
+    end_lat: float
+    end_lon: float
+    end_address_label: str
 
 
 class CourierJobOut(BaseModel):
     job_id: str
-    depot_lat: float
-    depot_lon: float
-    depot_address_label: str | None
+    start_lat: float | None
+    start_lon: float | None
+    start_address_label: str | None
+    end_lat: float | None
+    end_lon: float | None
+    end_address_label: str | None
     stop_count: int
 
 

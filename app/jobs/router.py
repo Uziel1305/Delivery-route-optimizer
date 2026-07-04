@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_role
-from app.auth.models import User, UserRole
+from app.auth.models import CourierProfile, User, UserRole
 from app.config import get_settings
 from app.database import get_db
 from app.jobs.models import (
@@ -25,6 +25,7 @@ from app.jobs.schemas import (
     CourierJobOut,
     CourierRouteOut,
     GenerateWithNRequest,
+    JobCourierLocationsUpdateRequest,
     JobCourierOut,
     JobCreateRequest,
     JobDetailOut,
@@ -40,8 +41,11 @@ from app.jobs.schemas import (
 )
 from app.optimization import solver as opt_solver
 from app.optimization.matrix.osrm_provider import OsrmTimeMatrixProvider
-from app.optimization.models import Coordinate, Courier as OptCourier, Depot, Stop as OptStop
+from app.optimization.models import Coordinate, Courier as OptCourier, Stop as OptStop
+from app.services.optimization_adapter import MissingCourierLocations
 from app.tasks.optimization_tasks import run_generation
+
+LOCATION_FIELDS = ("start_lat", "start_lon", "start_address_label", "end_lat", "end_lon", "end_address_label")
 
 settings = get_settings()
 router = APIRouter(tags=["jobs"])
@@ -105,23 +109,38 @@ def create_job(
     manager: User = Depends(require_role(UserRole.MANAGER)),
     db: Session = Depends(get_db),
 ):
+    # Copy-on-assign: each courier's current default terminals are copied
+    # into the JobCourier row, so later profile changes never rewrite this
+    # day. Couriers without locations can't be planned around — reject.
+    courier_ids = [jc.courier_id for jc in payload.couriers]
+    profiles = {
+        p.user_id: p
+        for p in db.query(CourierProfile).filter(CourierProfile.user_id.in_(courier_ids)).all()
+    }
+    missing = [cid for cid in courier_ids if cid not in profiles or not profiles[cid].has_locations]
+    if missing:
+        usernames = [u.username for u in db.query(User).filter(User.id.in_(missing)).all()]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "couriers have no start/end locations set", "couriers": usernames},
+        )
+
     job = Job(
         manager_id=manager.id,
-        depot_lat=payload.depot_lat,
-        depot_lon=payload.depot_lon,
-        depot_address_label=payload.depot_address_label,
         delivery_date=payload.delivery_date,
     )
     db.add(job)
     db.flush()
 
     for jc in payload.couriers:
+        profile = profiles[jc.courier_id]
         db.add(
             JobCourier(
                 job_id=job.id,
                 courier_id=jc.courier_id,
                 start_time_seconds=jc.start_time_seconds,
                 end_time_seconds=jc.end_time_seconds,
+                **{f: getattr(profile, f) for f in LOCATION_FIELDS},
             )
         )
 
@@ -146,8 +165,6 @@ def list_jobs(
             JobSummaryOut(
                 id=job.id,
                 status=job.status,
-                depot_lat=job.depot_lat,
-                depot_lon=job.depot_lon,
                 published_option_id=job.published_option_id,
                 delivery_date=job.delivery_date,
                 stop_count=stop_count,
@@ -167,9 +184,6 @@ def get_job(
     return JobDetailOut(
         id=job.id,
         status=job.status,
-        depot_lat=job.depot_lat,
-        depot_lon=job.depot_lon,
-        depot_address_label=job.depot_address_label,
         published_option_id=job.published_option_id,
         delivery_date=job.delivery_date,
     )
@@ -246,9 +260,57 @@ def list_job_couriers(
             username=user.username,
             start_time_seconds=jc.start_time_seconds,
             end_time_seconds=jc.end_time_seconds,
+            **{f: getattr(jc, f) for f in LOCATION_FIELDS},
         )
         for jc, user in rows
     ]
+
+
+@router.put("/jobs/{job_id}/couriers/{job_courier_id}/locations", response_model=JobCourierOut)
+def update_job_courier_locations(
+    job_id: str,
+    job_courier_id: str,
+    payload: JobCourierLocationsUpdateRequest,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    """Day-only edit of one courier's start/end for this delivery day — the
+    courier's profile defaults are untouched. Existing ACTIVE options no
+    longer match the day's terminals, so they flip to STALE (same treatment
+    as deleting a stop); the published option is deliberately left alone.
+    """
+    job = _get_owned_job(db, job_id, manager)
+    if job.status == JobStatus.ARCHIVED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="job is archived")
+    jc = (
+        db.query(JobCourier)
+        .filter(JobCourier.id == job_courier_id, JobCourier.job_id == job.id)
+        .first()
+    )
+    if jc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    for f in LOCATION_FIELDS:
+        setattr(jc, f, getattr(payload, f))
+
+    active_options = (
+        db.query(Option)
+        .filter(Option.job_id == job.id, Option.status == OptionStatus.ACTIVE)
+        .all()
+    )
+    for opt in active_options:
+        opt.status = OptionStatus.STALE
+    db.commit()
+
+    user = db.get(User, jc.courier_id)
+    return JobCourierOut(
+        job_courier_id=jc.id,
+        courier_id=jc.courier_id,
+        username=user.username if user else "",
+        start_time_seconds=jc.start_time_seconds,
+        end_time_seconds=jc.end_time_seconds,
+        **{f: getattr(jc, f) for f in LOCATION_FIELDS},
+    )
 
 
 @router.post("/locations", response_model=SavedLocationOut, status_code=status.HTTP_201_CREATED)
@@ -389,7 +451,10 @@ def delete_stop(
         return None
 
     parent_option_id = active_options[0].id
-    option = run_generation(db, job, courier_count=None, parent_option_id=parent_option_id)
+    try:
+        option = run_generation(db, job, courier_count=None, parent_option_id=parent_option_id)
+    except MissingCourierLocations:
+        return None
     if option is None:
         return None
     return _option_to_out(db, option)
@@ -402,7 +467,13 @@ def generate_option(
     db: Session = Depends(get_db),
 ):
     job = _get_owned_job(db, job_id, manager)
-    option = run_generation(db, job, courier_count=None)
+    try:
+        option = run_generation(db, job, courier_count=None)
+    except MissingCourierLocations:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="couriers on this day have no start/end locations (created before per-courier locations) — recreate the delivery day",
+        )
     if option is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="infeasible with full courier pool"
@@ -418,7 +489,13 @@ def generate_with_n_couriers(
     db: Session = Depends(get_db),
 ):
     job = _get_owned_job(db, job_id, manager)
-    option = run_generation(db, job, courier_count=payload.courier_count)
+    try:
+        option = run_generation(db, job, courier_count=payload.courier_count)
+    except MissingCourierLocations:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="couriers on this day have no start/end locations (created before per-courier locations) — recreate the delivery day",
+        )
     if option is None:
         # A failed "try N" leaves every existing option completely untouched.
         existing = db.query(Option).filter(Option.job_id == job.id).all()
@@ -494,9 +571,16 @@ def swap_stop(
     )
     if from_route is None or to_route is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="stop or target courier not in this option")
+    if from_route.id == to_route.id:
+        return _option_to_out(db, option)
 
     from_job_courier = db.get(JobCourier, from_route.job_courier_id)
     to_job_courier = db.get(JobCourier, to_route.job_courier_id)
+    if any(jc.start_lat is None or jc.end_lat is None for jc in (from_job_courier, to_job_courier)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="couriers on this day have no start/end locations",
+        )
 
     from_stop_ids = [
         s.job_stop_id
@@ -520,14 +604,25 @@ def swap_stop(
         for s in db.query(JobStop).filter(JobStop.id.in_(all_stop_ids), JobStop.deleted_at.is_(None)).all()
     }
 
-    depot = Depot(coordinate=Coordinate(lat=job.depot_lat, lon=job.depot_lon))
+    def to_opt_courier(jc: JobCourier) -> OptCourier:
+        return OptCourier(
+            id=jc.id,
+            start_time_seconds=jc.start_time_seconds,
+            end_time_seconds=jc.end_time_seconds,
+            start=Coordinate(lat=jc.start_lat, lon=jc.start_lon),
+            end=Coordinate(lat=jc.end_lat, lon=jc.end_lon),
+        )
+
+    from_courier = to_opt_courier(from_job_courier)
+    to_courier = to_opt_courier(to_job_courier)
+
     all_active_stops = db.query(JobStop).filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None)).all()
     matrix_provider = OsrmTimeMatrixProvider(base_url=settings.osrm_base_url)
     opt_stops = tuple(
         OptStop(id=s.id, coordinate=Coordinate(lat=s.lat, lon=s.lon), service_time_seconds=s.service_time_seconds)
         for s in all_active_stops
     )
-    time_matrix = matrix_provider.get_matrix(depot, opt_stops)
+    time_matrix = matrix_provider.get_matrix((from_courier, to_courier), opt_stops)
 
     def to_opt_stops(ids: list[str]) -> tuple:
         return tuple(
@@ -539,19 +634,8 @@ def swap_stop(
             for i in ids
         )
 
-    from_courier = OptCourier(
-        id=from_job_courier.id,
-        start_time_seconds=from_job_courier.start_time_seconds,
-        end_time_seconds=from_job_courier.end_time_seconds,
-    )
-    to_courier = OptCourier(
-        id=to_job_courier.id,
-        start_time_seconds=to_job_courier.start_time_seconds,
-        end_time_seconds=to_job_courier.end_time_seconds,
-    )
-
-    new_from_route = opt_solver.reorder_single_route(from_courier, to_opt_stops(from_stop_ids), depot, time_matrix)
-    new_to_route = opt_solver.reorder_single_route(to_courier, to_opt_stops(to_stop_ids), depot, time_matrix)
+    new_from_route = opt_solver.reorder_single_route(from_courier, to_opt_stops(from_stop_ids), time_matrix)
+    new_to_route = opt_solver.reorder_single_route(to_courier, to_opt_stops(to_stop_ids), time_matrix)
 
     if new_from_route is None or new_to_route is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="swap does not fit within courier windows")
@@ -633,7 +717,7 @@ def list_my_jobs(
     assignment query (published-only, self-only via the authenticated user).
     """
     rows = (
-        db.query(Job, OptionRouteStop.id)
+        db.query(Job, JobCourier, OptionRouteStop.id)
         .join(JobCourier, JobCourier.job_id == Job.id)
         .join(OptionCourierRoute, OptionCourierRoute.job_courier_id == JobCourier.id)
         .join(Option, OptionCourierRoute.option_id == Option.id)
@@ -647,18 +731,16 @@ def list_my_jobs(
         .all()
     )
     counts: dict[str, list] = {}
-    for job, _route_stop_id in rows:
-        counts.setdefault(job.id, [job, 0])
-        counts[job.id][1] += 1
+    for job, jc, _route_stop_id in rows:
+        counts.setdefault(job.id, [job, jc, 0])
+        counts[job.id][2] += 1
     return [
         CourierJobOut(
             job_id=job.id,
-            depot_lat=job.depot_lat,
-            depot_lon=job.depot_lon,
-            depot_address_label=job.depot_address_label,
             stop_count=count,
+            **{f: getattr(jc, f) for f in LOCATION_FIELDS},
         )
-        for job, count in counts.values()
+        for job, jc, count in counts.values()
     ]
 
 

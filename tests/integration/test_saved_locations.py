@@ -3,8 +3,6 @@ stops on a job. Against the live stack (real Postgres).
 """
 from tests.integration.conftest import login, register_user
 
-DEPOT = (32.0853, 34.7818)
-
 LOCATION_A = {"lat": 32.0733, "lon": 34.7925, "service_time_seconds": 90, "address_label": "Florentin 1"}
 LOCATION_B = {"lat": 32.1093, "lon": 34.8555, "service_time_seconds": 60, "address_label": "Ramat Gan 1"}
 
@@ -66,8 +64,6 @@ def test_add_stops_from_saved_locations(client, unique_suffix):
     job_id = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [],
         },
@@ -106,8 +102,6 @@ def test_add_stops_from_locations_ownership_boundary(client, unique_suffix):
     job_id = client.post(
         "/jobs",
         json={
-            "depot_lat": DEPOT[0],
-            "depot_lon": DEPOT[1],
             "delivery_date": "2026-07-06",
             "couriers": [],
         },

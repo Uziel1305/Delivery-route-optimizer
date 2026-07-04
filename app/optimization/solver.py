@@ -13,7 +13,6 @@ from app.optimization.models import (
     AlgorithmTier,
     Courier,
     CourierRoute,
-    Depot,
     ProblemInstance,
     RouteLeg,
     SolutionResult,
@@ -68,9 +67,10 @@ def solve_with_courier_count(
     tier = select_tier(instance)
 
     if tier == AlgorithmTier.OPTIMAL:
-        # Phase 1's route_cost table only depends on the stop set, not on
-        # which couriers are chosen — compute it once, reuse across every
-        # C(M, N) subset instead of re-running Held-Karp per subset.
+        # Phase 1's per-courier route_cost tables depend only on the stop set
+        # and that courier's own terminals — compute them once for the full
+        # pool, reuse across every C(M, N) subset instead of re-running
+        # Held-Karp per subset.
         shared = prepare_shared_tables(instance)
         best_result: SolutionResult | None = None
         for subset in itertools.combinations(couriers, n):
@@ -99,7 +99,6 @@ def _heuristic_solve_with_courier_count(
 
     while len(remaining_couriers) > target_courier_count:
         trial_instance = ProblemInstance(
-            depot=instance.depot,
             stops=instance.stops,
             couriers=tuple(remaining_couriers),
             time_matrix=instance.time_matrix,
@@ -113,7 +112,6 @@ def _heuristic_solve_with_courier_count(
         remaining_couriers = [c for c in remaining_couriers if c.id != lightest.id]
 
     final_instance = ProblemInstance(
-        depot=instance.depot,
         stops=instance.stops,
         couriers=tuple(remaining_couriers),
         time_matrix=instance.time_matrix,
@@ -127,7 +125,6 @@ def _heuristic_solve_with_courier_count(
 def reorder_single_route(
     courier: Courier,
     stops: tuple[Stop, ...],
-    depot: Depot,
     time_matrix: TimeMatrix,
 ) -> CourierRoute | None:
     """Recompute the optimal stop order for one courier's already-decided
@@ -136,20 +133,30 @@ def reorder_single_route(
     route). Returns None if no ordering fits the courier's window.
     """
     if len(stops) <= DEFAULT_CONFIG.optimal_tier_max_stops:
-        return held_karp_single_route(stops, depot, courier.id, courier.window_seconds, time_matrix)
+        return held_karp_single_route(stops, courier, time_matrix)
     return _nearest_neighbor_2opt_single_route(courier, stops, time_matrix)
 
 
 def _nearest_neighbor_2opt_single_route(
     courier: Courier, stops: tuple[Stop, ...], time_matrix: TimeMatrix
 ) -> CourierRoute | None:
-    stop_index_by_id = {sid: i + 1 for i, sid in enumerate(time_matrix.stop_ids)}
-    matrix_idx = {s.id: stop_index_by_id[s.id] for s in stops}
+    if not stops:
+        return CourierRoute(
+            courier_id=courier.id,
+            ordered_stop_ids=(),
+            legs=(),
+            total_travel_seconds=0.0,
+            total_service_seconds=0.0,
+        )
+
+    matrix_idx = {s.id: time_matrix.stop_index(s.id) for s in stops}
+    start_idx = time_matrix.start_index(courier.id)
+    end_idx = time_matrix.end_index(courier.id)
     dist = time_matrix.matrix
 
     remaining = list(stops)
     order: list[Stop] = []
-    current = 0  # depot
+    current = start_idx
     while remaining:
         nxt = min(remaining, key=lambda s: dist[current][matrix_idx[s.id]])
         order.append(nxt)
@@ -159,10 +166,10 @@ def _nearest_neighbor_2opt_single_route(
     def route_travel(seq: list[Stop]) -> float:
         if not seq:
             return 0.0
-        total = dist[0][matrix_idx[seq[0].id]]
+        total = dist[start_idx][matrix_idx[seq[0].id]]
         for a, b in zip(seq, seq[1:]):
             total += dist[matrix_idx[a.id]][matrix_idx[b.id]]
-        total += dist[matrix_idx[seq[-1].id]][0]
+        total += dist[matrix_idx[seq[-1].id]][end_idx]
         return total
 
     improved = True
@@ -181,15 +188,14 @@ def _nearest_neighbor_2opt_single_route(
         return None
 
     legs: list[RouteLeg] = []
-    prev_idx = 0
+    prev_idx = start_idx
     prev_id: str | None = None
     for s in order:
         idx = matrix_idx[s.id]
         legs.append(RouteLeg(from_stop_id=prev_id, to_stop_id=s.id, travel_seconds=dist[prev_idx][idx]))
         prev_idx = idx
         prev_id = s.id
-    if order:
-        legs.append(RouteLeg(from_stop_id=prev_id, to_stop_id=None, travel_seconds=dist[prev_idx][0]))
+    legs.append(RouteLeg(from_stop_id=prev_id, to_stop_id=None, travel_seconds=dist[prev_idx][end_idx]))
 
     return CourierRoute(
         courier_id=courier.id,

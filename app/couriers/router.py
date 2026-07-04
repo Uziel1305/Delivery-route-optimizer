@@ -5,11 +5,40 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import CourierProfile, User, UserRole
 from app.auth.dependencies import require_role
-from app.couriers.models import CourierInvite, InviteStatus
-from app.couriers.schemas import CourierOut, InviteCreateRequest, InviteOut, MyManagerOut
+from app.couriers.models import CourierInvite, InviteStatus, LocationChangeRequest, LocationRequestStatus
+from app.couriers.schemas import (
+    CourierLocationsOut,
+    CourierOut,
+    InviteCreateRequest,
+    InviteOut,
+    LocationRequestOut,
+    LocationRequestWithCourierOut,
+    MyManagerOut,
+    RosterCourierOut,
+    SetLocationsRequest,
+    SetLocationsResponse,
+)
 from app.database import get_db
 
 router = APIRouter(tags=["couriers"])
+
+LOCATION_FIELDS = ("start_lat", "start_lon", "start_address_label", "end_lat", "end_lon", "end_address_label")
+
+
+def _apply_locations(profile: CourierProfile, source) -> None:
+    for f in LOCATION_FIELDS:
+        setattr(profile, f, getattr(source, f))
+
+
+def _pending_request_for(db: Session, courier_id: str) -> LocationChangeRequest | None:
+    return (
+        db.query(LocationChangeRequest)
+        .filter(
+            LocationChangeRequest.courier_id == courier_id,
+            LocationChangeRequest.status == LocationRequestStatus.PENDING,
+        )
+        .first()
+    )
 
 
 @router.get("/managers/me/courier-suggestions", response_model=list[CourierOut])
@@ -221,17 +250,36 @@ def leave_manager(
     db.commit()
 
 
-@router.get("/managers/me/couriers", response_model=list[CourierOut])
+@router.get("/managers/me/couriers", response_model=list[RosterCourierOut])
 def list_roster(
     manager: User = Depends(require_role(UserRole.MANAGER)),
     db: Session = Depends(get_db),
 ):
-    return (
-        db.query(User)
+    rows = (
+        db.query(User, CourierProfile)
         .join(CourierProfile, CourierProfile.user_id == User.id)
         .filter(CourierProfile.manager_id == manager.id)
         .all()
     )
+    result = []
+    for user, profile in rows:
+        pending = _pending_request_for(db, user.id)
+        result.append(
+            RosterCourierOut(
+                id=user.id,
+                username=user.username,
+                email=user.email,
+                has_locations=profile.has_locations,
+                start_lat=profile.start_lat,
+                start_lon=profile.start_lon,
+                start_address_label=profile.start_address_label,
+                end_lat=profile.end_lat,
+                end_lon=profile.end_lon,
+                end_address_label=profile.end_address_label,
+                pending_request=LocationRequestOut.model_validate(pending) if pending else None,
+            )
+        )
+    return result
 
 
 @router.delete("/managers/me/couriers/{courier_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -249,3 +297,184 @@ def remove_courier(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     profile.manager_id = None
     db.commit()
+
+
+# --- Courier start/end locations & the manager-consent change flow ---------
+
+
+@router.get("/couriers/me/locations", response_model=CourierLocationsOut)
+def get_my_locations(
+    courier: User = Depends(require_role(UserRole.COURIER)),
+    db: Session = Depends(get_db),
+):
+    profile = db.get(CourierProfile, courier.id)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="courier profile missing")
+    pending = _pending_request_for(db, courier.id)
+    return CourierLocationsOut(
+        has_locations=profile.has_locations,
+        start_lat=profile.start_lat,
+        start_lon=profile.start_lon,
+        start_address_label=profile.start_address_label,
+        end_lat=profile.end_lat,
+        end_lon=profile.end_lon,
+        end_address_label=profile.end_address_label,
+        pending_request=LocationRequestOut.model_validate(pending) if pending else None,
+    )
+
+
+@router.put("/couriers/me/locations", response_model=SetLocationsResponse)
+def set_my_locations(
+    payload: SetLocationsRequest,
+    courier: User = Depends(require_role(UserRole.COURIER)),
+    db: Session = Depends(get_db),
+):
+    """First-time onboarding always applies directly (a manager can't plan
+    with a location-less courier anyway). After that: unaffiliated couriers
+    apply directly; managed couriers create a pending approval request.
+    """
+    profile = db.get(CourierProfile, courier.id)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="courier profile missing")
+
+    if profile.manager_id is None or not profile.has_locations:
+        _apply_locations(profile, payload)
+        db.commit()
+        return SetLocationsResponse(applied=True, pending_request=None)
+
+    if _pending_request_for(db, courier.id) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="a change request is already pending")
+
+    request = LocationChangeRequest(
+        courier_id=courier.id,
+        start_lat=payload.start_lat,
+        start_lon=payload.start_lon,
+        start_address_label=payload.start_address_label,
+        end_lat=payload.end_lat,
+        end_lon=payload.end_lon,
+        end_address_label=payload.end_address_label,
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return SetLocationsResponse(applied=False, pending_request=LocationRequestOut.model_validate(request))
+
+
+@router.delete("/couriers/me/locations/pending", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_my_pending_location_request(
+    courier: User = Depends(require_role(UserRole.COURIER)),
+    db: Session = Depends(get_db),
+):
+    pending = _pending_request_for(db, courier.id)
+    if pending is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no pending request")
+    pending.status = LocationRequestStatus.CANCELLED
+    pending.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def _get_managed_request(db: Session, request_id: str, manager: User) -> LocationChangeRequest:
+    """Ownership re-verified against the DB: the request's courier must
+    currently belong to this manager (never trust ids from the path alone).
+    """
+    request = db.get(LocationChangeRequest, request_id)
+    if request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    profile = db.get(CourierProfile, request.courier_id)
+    if profile is None or profile.manager_id != manager.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if request.status != LocationRequestStatus.PENDING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="request is not pending")
+    return request
+
+
+@router.get("/managers/me/location-requests", response_model=list[LocationRequestWithCourierOut])
+def list_location_requests(
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(LocationChangeRequest, User.username)
+        .join(CourierProfile, CourierProfile.user_id == LocationChangeRequest.courier_id)
+        .join(User, User.id == LocationChangeRequest.courier_id)
+        .filter(
+            CourierProfile.manager_id == manager.id,
+            LocationChangeRequest.status == LocationRequestStatus.PENDING,
+        )
+        .order_by(LocationChangeRequest.created_at)
+        .all()
+    )
+    return [
+        LocationRequestWithCourierOut(
+            **LocationRequestOut.model_validate(request).model_dump(),
+            courier_username=username,
+        )
+        for request, username in rows
+    ]
+
+
+@router.post("/managers/me/location-requests/{request_id}/approve", response_model=LocationRequestOut)
+def approve_location_request(
+    request_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    request = _get_managed_request(db, request_id, manager)
+    profile = db.get(CourierProfile, request.courier_id)
+    _apply_locations(profile, request)
+    request.status = LocationRequestStatus.APPROVED
+    request.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+@router.post("/managers/me/location-requests/{request_id}/decline", response_model=LocationRequestOut)
+def decline_location_request(
+    request_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    request = _get_managed_request(db, request_id, manager)
+    request.status = LocationRequestStatus.DECLINED
+    request.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+@router.put("/managers/me/couriers/{courier_id}/locations", response_model=CourierLocationsOut)
+def set_courier_locations(
+    courier_id: str,
+    payload: SetLocationsRequest,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    """Direct manager edit of a courier's default locations. Supersedes any
+    pending change request from the courier (marked cancelled).
+    """
+    profile = (
+        db.query(CourierProfile)
+        .filter(CourierProfile.user_id == courier_id, CourierProfile.manager_id == manager.id)
+        .first()
+    )
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    _apply_locations(profile, payload)
+    pending = _pending_request_for(db, courier_id)
+    if pending is not None:
+        pending.status = LocationRequestStatus.CANCELLED
+        pending.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return CourierLocationsOut(
+        has_locations=profile.has_locations,
+        start_lat=profile.start_lat,
+        start_lon=profile.start_lon,
+        start_address_label=profile.start_address_label,
+        end_lat=profile.end_lat,
+        end_lon=profile.end_lon,
+        end_address_label=profile.end_address_label,
+        pending_request=None,
+    )
