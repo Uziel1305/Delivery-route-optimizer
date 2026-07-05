@@ -17,7 +17,7 @@ Services:
 - OSRM routing — http://localhost:5001
 - RabbitMQ management — http://localhost:15672
 
-**First run** downloads the Israel/Palestine OSM extract (~115 MB) and preprocesses it for OSRM (`osrm-download` → `osrm-init`). This happens once; subsequent runs reuse the `osrm_data` volume. The backend runs `alembic upgrade head` automatically on boot.
+**First run** downloads the Israel region OSM extract (~115 MB) and preprocesses it for OSRM (`osrm-download` → `osrm-init`). This happens once; subsequent runs reuse the `osrm_data` volume. The backend runs `alembic upgrade head` automatically on boot.
 
 ## Tests
 
