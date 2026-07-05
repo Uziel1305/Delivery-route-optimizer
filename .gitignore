@@ -36,3 +36,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local documents (not part of the repo)
+architecture.docx
