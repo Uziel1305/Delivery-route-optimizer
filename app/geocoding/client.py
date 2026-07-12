@@ -6,7 +6,7 @@ settings = get_settings()
 
 # Photon's public instance rejects the default python-httpx User-Agent with a
 # 403; a descriptive UA (per its usage policy) is required.
-_USER_AGENT = "DeliveryRouteOptimizer/0.1 (Bar-Ilan project; geocoding proxy)"
+_USER_AGENT = "DeliveryRouteOptimizer/0.1 (geocoding proxy)"
 
 
 class PhotonError(Exception):
