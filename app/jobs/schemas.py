@@ -125,14 +125,10 @@ class OptionOut(BaseModel):
     total_duration_seconds: float
     feasible: bool
     status: OptionStatus
+    error_detail: str | None = None
     parent_option_id: str | None
     courier_routes: list[CourierRouteOut]
     unassigned_stop_ids: list[str]
-
-
-class GenerateInfeasibleResponse(BaseModel):
-    detail: str
-    existing_options: list[OptionOut]
 
 
 class SwapRequest(BaseModel):

@@ -8,6 +8,7 @@ from app.auth.models import CourierProfile, User, UserRole
 from app.config import get_settings
 from app.database import get_db
 from app.jobs.models import (
+    CourierCountMode,
     Job,
     JobCourier,
     JobStatus,
@@ -42,8 +43,12 @@ from app.jobs.schemas import (
 from app.optimization import solver as opt_solver
 from app.optimization.matrix.osrm_provider import OsrmTimeMatrixProvider
 from app.optimization.models import Coordinate, Courier as OptCourier, Stop as OptStop
-from app.services.optimization_adapter import MissingCourierLocations
-from app.tasks.optimization_tasks import run_generation
+from app.services.optimization_adapter import (
+    MissingCourierLocations,
+    build_opt_couriers,
+    create_pending_option,
+)
+from app.tasks.optimization_tasks import run_optimization_task
 
 LOCATION_FIELDS = ("start_lat", "start_lon", "start_address_label", "end_lat", "end_lon", "end_address_label")
 
@@ -97,10 +102,40 @@ def _option_to_out(db: Session, option: Option) -> OptionOut:
         total_duration_seconds=option.total_duration_seconds,
         feasible=option.feasible,
         status=option.status,
+        error_detail=option.error_detail,
         parent_option_id=option.parent_option_id,
         courier_routes=routes_out,
         unassigned_stop_ids=[u.job_stop_id for u in unassigned],
     )
+
+
+def _dispatch_generation(
+    db: Session,
+    job: Job,
+    requested_courier_count: int | None,
+    parent_option_id: str | None = None,
+) -> Option:
+    """Create a PENDING option and hand it to the Celery worker. Cheap
+    validation (couriers have terminals) happens here so the common mistakes
+    still fail fast as 422s; solver-level infeasibility is discovered by the
+    worker and lands on the option as FAILED + error_detail.
+    """
+    job_couriers = db.query(JobCourier).filter(JobCourier.job_id == job.id).all()
+    try:
+        build_opt_couriers(job_couriers)  # validation only
+    except MissingCourierLocations:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="couriers on this day have no start/end locations (created before per-courier locations) — recreate the delivery day",
+        )
+
+    active_stops = db.query(JobStop).filter(JobStop.job_id == job.id, JobStop.deleted_at.is_(None)).all()
+    mode = CourierCountMode.EXACT if requested_courier_count is not None else None
+    option = create_pending_option(
+        db, job, requested_courier_count, mode, active_stops, job_couriers, parent_option_id=parent_option_id
+    )
+    run_optimization_task.delay(option.id)
+    return option
 
 
 @router.post("/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)
@@ -450,12 +485,13 @@ def delete_stop(
     if not active_options:
         return None
 
+    # Regenerate asynchronously: the response carries a PENDING option the
+    # frontend polls; couriers without locations just skip regeneration
+    # (matches the old silent-None behavior).
     parent_option_id = active_options[0].id
     try:
-        option = run_generation(db, job, courier_count=None, parent_option_id=parent_option_id)
-    except MissingCourierLocations:
-        return None
-    if option is None:
+        option = _dispatch_generation(db, job, requested_courier_count=None, parent_option_id=parent_option_id)
+    except HTTPException:
         return None
     return _option_to_out(db, option)
 
@@ -466,18 +502,12 @@ def generate_option(
     manager: User = Depends(require_role(UserRole.MANAGER)),
     db: Session = Depends(get_db),
 ):
+    """Returns immediately with a PENDING option; a Celery worker solves it.
+    Poll GET /jobs/{id}/options until the status flips to active (or failed,
+    with the reason in error_detail).
+    """
     job = _get_owned_job(db, job_id, manager)
-    try:
-        option = run_generation(db, job, courier_count=None)
-    except MissingCourierLocations:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="couriers on this day have no start/end locations (created before per-courier locations) — recreate the delivery day",
-        )
-    if option is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="infeasible with full courier pool"
-        )
+    option = _dispatch_generation(db, job, requested_courier_count=None)
     return _option_to_out(db, option)
 
 
@@ -488,24 +518,18 @@ def generate_with_n_couriers(
     manager: User = Depends(require_role(UserRole.MANAGER)),
     db: Session = Depends(get_db),
 ):
+    """Async like plain generate. Out-of-range N fails fast as a 422 here;
+    genuine infeasibility with a valid N is discovered by the worker and
+    lands as a FAILED option (existing options stay untouched either way).
+    """
     job = _get_owned_job(db, job_id, manager)
-    try:
-        option = run_generation(db, job, courier_count=payload.courier_count)
-    except MissingCourierLocations:
+    assigned = db.query(JobCourier).filter(JobCourier.job_id == job.id).count()
+    if payload.courier_count <= 0 or payload.courier_count > assigned:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="couriers on this day have no start/end locations (created before per-courier locations) — recreate the delivery day",
+            detail=f"courier_count must be between 1 and {assigned} (couriers assigned to this day)",
         )
-    if option is None:
-        # A failed "try N" leaves every existing option completely untouched.
-        existing = db.query(Option).filter(Option.job_id == job.id).all()
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "message": f"not feasible with exactly {payload.courier_count} couriers",
-                "existing_options": [_option_to_out(db, o).model_dump() for o in existing],
-            },
-        )
+    option = _dispatch_generation(db, job, requested_courier_count=payload.courier_count)
     return _option_to_out(db, option)
 
 
@@ -532,6 +556,40 @@ def get_option(
     if option is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return _option_to_out(db, option)
+
+
+@router.delete("/jobs/{job_id}/options/{option_id}", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_failed_option(
+    job_id: str,
+    option_id: str,
+    manager: User = Depends(require_role(UserRole.MANAGER)),
+    db: Session = Depends(get_db),
+):
+    """Dismiss a FAILED option card. Only FAILED options are deletable —
+    everything else is history (stale/superseded) or live (active/published/
+    pending) and must not be removed this way.
+    """
+    job = _get_owned_job(db, job_id, manager)
+    option = db.query(Option).filter(Option.id == option_id, Option.job_id == job.id).first()
+    if option is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if option.status != OptionStatus.FAILED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="only failed options can be dismissed")
+
+    # FAILED options have no children, but delete defensively (no FK cascades).
+    route_ids = [
+        rid for (rid,) in db.query(OptionCourierRoute.id).filter(OptionCourierRoute.option_id == option.id).all()
+    ]
+    if route_ids:
+        db.query(OptionRouteStop).filter(OptionRouteStop.option_courier_route_id.in_(route_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(OptionCourierRoute).filter(OptionCourierRoute.id.in_(route_ids)).delete(synchronize_session=False)
+    db.query(OptionUnassignedStop).filter(OptionUnassignedStop.option_id == option.id).delete(
+        synchronize_session=False
+    )
+    db.delete(option)
+    db.commit()
 
 
 @router.post("/jobs/{job_id}/options/{option_id}/swap", response_model=OptionOut)

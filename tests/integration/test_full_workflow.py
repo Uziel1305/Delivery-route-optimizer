@@ -2,7 +2,7 @@
 routing engine for the time matrix. Coordinates are real Tel Aviv locations
 so OSRM can snap them to the road network.
 """
-from tests.integration.conftest import login, register_user, set_courier_locations
+from tests.integration.conftest import login, register_user, set_courier_locations, wait_for_option
 
 # Real Tel Aviv-area coordinates (lat, lon) so OSRM returns real travel times.
 STOPS = [
@@ -70,10 +70,13 @@ def test_manager_courier_full_workflow(client, unique_suffix):
         )
         assert r.status_code == 201
 
-    # Generate an option — this calls REAL OSRM for the time matrix.
+    # Generate an option — returns PENDING immediately; the Celery worker
+    # solves it against REAL OSRM, so poll until it lands.
     r = client.post(f"/jobs/{job_id}/options/generate", headers=mgr)
     assert r.status_code == 200, r.text
-    option = r.json()
+    assert r.json()["status"] == "pending"
+    option = wait_for_option(client, mgr, job_id, r.json()["id"])
+    assert option["status"] == "active", option.get("error_detail")
     assert option["feasible"] is True
     assert option["total_duration_seconds"] > 0  # real travel time, not zero
     option_id = option["id"]
@@ -136,7 +139,8 @@ def test_authorization_boundary_other_courier_cannot_read(client, unique_suffix)
             json={"lat": lat, "lon": lon, "service_time_seconds": 60, "address_label": f"{lat},{lon}"},
             headers=mgr,
         )
-    option = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    pending = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    option = wait_for_option(client, mgr, job_id, pending["id"])
     client.post(f"/jobs/{job_id}/options/{option['id']}/publish", headers=mgr)
 
     # Unrelated courier: empty global list, 404 (not 403, not empty) for the specific job.
@@ -218,7 +222,8 @@ def test_ui_read_endpoints(client, unique_suffix):
     assert job_couriers[0]["end_address_label"] == "Courier end, central TLV"
 
     # Generate + publish, then the courier's job list should include it.
-    option = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    pending = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    option = wait_for_option(client, mgr, job_id, pending["id"])
     client.post(f"/jobs/{job_id}/options/{option['id']}/publish", headers=mgr)
 
     my_jobs = client.get("/couriers/me/jobs", headers=cour).json()

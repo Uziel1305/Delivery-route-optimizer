@@ -1,3 +1,5 @@
+import time
+
 from app.optimization.algorithms.construct_and_improve import CheapestInsertion2OptAlgorithm
 from app.optimization.algorithms.exact_dp import HeldKarpExactAlgorithm
 from app.optimization.benchmarking.synthetic import generate_synthetic_instance
@@ -38,3 +40,27 @@ def test_heuristic_handles_zero_stops():
     result = heuristic.solve(instance)
     assert result.feasible
     assert result.total_duration_seconds == 0.0
+
+
+def test_time_budget_caps_improvement_and_stays_valid():
+    """Anytime behavior: a tight budget must cut the improvement phase short
+    (construction is deliberately unbudgeted) while still returning a
+    complete, feasible solution covering every stop.
+    """
+    instance = generate_synthetic_instance(80, 4, seed=3, courier_window_seconds=8 * 3600)
+
+    t0 = time.perf_counter()
+    unbudgeted = heuristic.solve(instance)
+    unbudgeted_seconds = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    budgeted = heuristic.solve(instance, time_budget_seconds=0.2)
+    budgeted_seconds = time.perf_counter() - t0
+
+    assert budgeted_seconds < unbudgeted_seconds
+    assert budgeted.feasible
+    assigned = [sid for route in budgeted.routes for sid in route.ordered_stop_ids]
+    assert len(assigned) == len(instance.stops)
+    # The budgeted answer may be worse, but never better than what full
+    # convergence found (both start from the same deterministic construction).
+    assert budgeted.total_duration_seconds >= unbudgeted.total_duration_seconds - 1e-6

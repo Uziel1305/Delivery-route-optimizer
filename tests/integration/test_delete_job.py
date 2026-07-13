@@ -2,7 +2,7 @@
 option — the teardown has no FK cascades to lean on, so this exercises the
 manual child-row deletion order end to end. Against the live stack.
 """
-from tests.integration.conftest import login, register_user, set_courier_locations
+from tests.integration.conftest import login, register_user, set_courier_locations, wait_for_option
 
 STOPS = [
     (32.0733, 34.7925),  # Florentin
@@ -48,7 +48,8 @@ def test_delete_published_job_full_teardown(client, unique_suffix):
         )
         assert r.status_code == 201
 
-    option = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    pending = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    option = wait_for_option(client, mgr, job_id, pending["id"])
     r = client.post(f"/jobs/{job_id}/options/{option['id']}/publish", headers=mgr)
     assert r.status_code == 200
 

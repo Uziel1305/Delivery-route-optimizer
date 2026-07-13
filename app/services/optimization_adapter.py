@@ -83,31 +83,54 @@ def snapshot_hash(active_stops: list[JobStop], job_couriers: list[JobCourier]) -
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def persist_solution(
+def create_pending_option(
     db: Session,
     job: Job,
     requested_courier_count: int | None,
     courier_count_mode: CourierCountMode | None,
-    result: SolutionResult,
     active_stops: list[JobStop],
     job_couriers: list[JobCourier],
     parent_option_id: str | None = None,
 ) -> Option:
+    """Create the PENDING placeholder row the worker will later fill.
+
+    The snapshot hash is taken NOW (at dispatch), so the worker can detect a
+    day edited mid-solve by re-hashing at completion. algorithm_key/tier are
+    placeholders until the solve picks them.
+    """
     option = Option(
         job_id=job.id,
         label="Option",
         requested_courier_count=requested_courier_count,
         courier_count_mode=courier_count_mode,
-        algorithm_key=result.algorithm_key,
-        algorithm_tier=result.algorithm_tier.value,
-        total_duration_seconds=result.total_duration_seconds,
-        feasible=result.feasible,
-        status=OptionStatus.ACTIVE,
+        algorithm_key="",
+        algorithm_tier="",
+        total_duration_seconds=0.0,
+        feasible=True,
+        status=OptionStatus.PENDING,
         parent_option_id=parent_option_id,
         stops_snapshot_hash=snapshot_hash(active_stops, job_couriers),
     )
     db.add(option)
-    db.flush()
+    db.commit()
+    db.refresh(option)
+    return option
+
+
+def fill_option(
+    db: Session,
+    option: Option,
+    result: SolutionResult,
+    *,
+    final_status: OptionStatus = OptionStatus.ACTIVE,
+) -> Option:
+    """Write a solve result into an existing (PENDING) option row and flip
+    its status. Commits."""
+    option.algorithm_key = result.algorithm_key
+    option.algorithm_tier = result.algorithm_tier.value
+    option.total_duration_seconds = result.total_duration_seconds
+    option.feasible = result.feasible
+    option.status = final_status
 
     for route in result.routes:
         courier_route = OptionCourierRoute(

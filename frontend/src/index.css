@@ -187,6 +187,10 @@ h3 {
   background: var(--warning-soft);
   color: var(--warning);
 }
+.badge-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 
 /* ---------- Layout ---------- */
 .app-shell {
@@ -534,6 +538,12 @@ h3 {
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+.spinner-sm {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
 }
 .loading-center {
   display: flex;

@@ -56,11 +56,14 @@ export function statusBadgeClass(status) {
     case "options_ready":
     case "active":
       return "badge badge-primary";
+    case "pending":
     case "draft":
       return "badge badge-gray";
     case "stale":
     case "superseded":
       return "badge badge-warning";
+    case "failed":
+      return "badge badge-danger";
     default:
       return "badge badge-gray";
   }

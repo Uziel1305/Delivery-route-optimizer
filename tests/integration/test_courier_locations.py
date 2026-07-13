@@ -7,6 +7,7 @@ from tests.integration.conftest import (
     login,
     register_user,
     set_courier_locations,
+    wait_for_option,
 )
 
 STOPS = [
@@ -146,7 +147,8 @@ def test_copy_on_assign_and_day_only_edit(client, unique_suffix):
     assert jc["start_address_label"] == DEFAULT_COURIER_LOCATIONS["start_address_label"]
 
     # Generate an option, then edit the day's copy — active options go stale.
-    option = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    pending = client.post(f"/jobs/{job_id}/options/generate", headers=mgr).json()
+    option = wait_for_option(client, mgr, job_id, pending["id"])
     assert option["status"] == "active"
 
     r = client.put(
@@ -163,4 +165,6 @@ def test_copy_on_assign_and_day_only_edit(client, unique_suffix):
     # Regeneration uses the day's new terminals and succeeds.
     regenerated = client.post(f"/jobs/{job_id}/options/generate", headers=mgr)
     assert regenerated.status_code == 200
-    assert regenerated.json()["feasible"] is True
+    final = wait_for_option(client, mgr, job_id, regenerated.json()["id"])
+    assert final["status"] == "active"
+    assert final["feasible"] is True

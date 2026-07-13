@@ -1,11 +1,14 @@
 """Fixtures for integration tests that run against the LIVE docker-compose
 stack over HTTP (real Postgres, real OSRM, real Celery). Unlike the unit
-tests in tests/optimization/, these need `docker compose up` running.
+tests in tests/optimization/, these need `docker compose up` running —
+including the `worker` service: route generation is dispatched to Celery
+and tests poll until the worker finishes (see wait_for_option).
 
 Run with:  API_BASE_URL=http://localhost:8000 pytest tests/integration -v
 The whole suite auto-skips if the backend /health endpoint is unreachable.
 """
 import os
+import time
 import uuid
 
 import httpx
@@ -80,3 +83,26 @@ def set_courier_locations(client: httpx.Client, headers: dict, locations: dict |
     resp = client.put("/couriers/me/locations", json=locations or DEFAULT_COURIER_LOCATIONS, headers=headers)
     resp.raise_for_status()
     return resp.json()
+
+
+def wait_for_option(
+    client: httpx.Client,
+    headers: dict,
+    job_id: str,
+    option_id: str,
+    timeout_seconds: float = 90.0,
+) -> dict:
+    """Poll until the Celery worker finishes a dispatched option (any
+    terminal status: active/stale/failed). Fails the test on timeout —
+    usually a sign the worker container isn't running."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        resp = client.get(f"/jobs/{job_id}/options/{option_id}", headers=headers)
+        resp.raise_for_status()
+        option = resp.json()
+        if option["status"] != "pending":
+            return option
+        time.sleep(0.5)
+    pytest.fail(
+        f"option {option_id} still pending after {timeout_seconds}s — is the `worker` compose service running?"
+    )

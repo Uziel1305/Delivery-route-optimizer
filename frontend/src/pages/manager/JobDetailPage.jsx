@@ -59,6 +59,21 @@ export default function JobDetailPage() {
     api.get("/locations").then(setSavedLocations);
   }, [jobId]);
 
+  // Generation runs on a background worker: while any option is pending,
+  // poll until every dispatched solve lands (active/stale/failed).
+  const hasPending = options.some((o) => o.status === "pending");
+  useEffect(() => {
+    if (!hasPending) return;
+    const t = setTimeout(async () => {
+      const o = await api.get(`/jobs/${jobId}/options`);
+      setOptions(o);
+      if (!o.some((x) => x.status === "pending")) {
+        setJob(await api.get(`/jobs/${jobId}`));
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [hasPending, options, jobId]);
+
   const selectedOption = options.find((o) => o.id === selectedOptionId) || null;
 
   function toggleLocation(id) {
@@ -91,13 +106,13 @@ export default function JobDetailPage() {
     setNotice(null);
     setGenerating(true);
     try {
+      // Returns a PENDING option immediately; the poll effect tracks it.
       const opt = await api.post(`/jobs/${jobId}/options/generate`);
-      await loadCore();
+      setOptions((prev) => [...prev, opt]);
       setSelectedOptionId(opt.id);
-      setNotice("New option generated.");
     } catch (err) {
       const d = err instanceof ApiError ? err.detail : null;
-      setError(typeof d === "string" ? d : "Could not generate a feasible option.");
+      setError(typeof d === "string" ? d : "Could not start generating routes.");
     } finally {
       setGenerating(false);
     }
@@ -112,17 +127,22 @@ export default function JobDetailPage() {
       const opt = await api.post(`/jobs/${jobId}/options/generate-with-n-couriers`, {
         courier_count: Number(nCouriers),
       });
-      await loadCore();
+      setOptions((prev) => [...prev, opt]);
       setSelectedOptionId(opt.id);
-      setNotice(`Generated an option using ${nCouriers} courier(s).`);
       setNCouriers("");
     } catch (err) {
       const d = err instanceof ApiError ? err.detail : null;
-      const msg = d && typeof d === "object" && d.message ? d.message : `Not feasible with ${nCouriers} courier(s).`;
-      setError(msg + " Your existing options are unchanged.");
+      setError(typeof d === "string" ? d : `Could not try with ${nCouriers} courier(s).`);
     } finally {
       setGenerating(false);
     }
+  }
+
+  async function dismissOption(optionId) {
+    setError(null);
+    await api.delete(`/jobs/${jobId}/options/${optionId}`);
+    if (selectedOptionId === optionId) setSelectedOptionId(null);
+    setOptions((prev) => prev.filter((o) => o.id !== optionId));
   }
 
   async function swapStop(jobStopId, toJobCourierId) {
@@ -295,11 +315,11 @@ export default function JobDetailPage() {
             <h3 style={{ marginBottom: 16 }}>Generate routes</h3>
             <button
               className="btn btn-primary btn-block"
-              disabled={generating || stops.length === 0 || couriers.length === 0}
+              disabled={generating || hasPending || stops.length === 0 || couriers.length === 0}
               onClick={generate}
               style={{ marginBottom: 12 }}
             >
-              {generating ? "Optimizing…" : "Generate optimal split"}
+              {hasPending ? "Optimizing…" : "Generate optimal split"}
             </button>
             <form onSubmit={generateWithN} className="toolbar">
               <input
@@ -312,7 +332,7 @@ export default function JobDetailPage() {
                 onChange={(e) => setNCouriers(e.target.value)}
                 style={{ flex: 1 }}
               />
-              <button className="btn btn-ghost" disabled={generating || !nCouriers}>
+              <button className="btn btn-ghost" disabled={generating || hasPending || !nCouriers}>
                 Try
               </button>
             </form>
@@ -375,19 +395,62 @@ export default function JobDetailPage() {
                           {o.requested_courier_count ? ` · ${o.requested_courier_count} couriers` : ""}
                         </div>
                         <div className="list-row-sub">
-                          {formatDuration(o.total_duration_seconds)} total ·{" "}
-                          {o.courier_routes.filter((r) => r.stops.length).length} routes
+                          {o.status === "pending" ? (
+                            "Optimizing routes…"
+                          ) : o.status === "failed" ? (
+                            o.error_detail || "Generation failed."
+                          ) : (
+                            <>
+                              {formatDuration(o.total_duration_seconds)} total ·{" "}
+                              {o.courier_routes.filter((r) => r.stops.length).length} routes
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
-                    <span className={statusBadgeClass(o.status)}>{o.status}</span>
+                    {o.status === "failed" ? (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dismissOption(o.id);
+                        }}
+                      >
+                        Dismiss
+                      </button>
+                    ) : (
+                      <span className={statusBadgeClass(o.status)}>
+                        {o.status === "pending" && <span className="spinner spinner-sm" style={{ marginRight: 6 }} />}
+                        {o.status}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {selectedOption && (
+          {selectedOption && selectedOption.status === "pending" && (
+            <div className="card empty">
+              <div className="loading-center" style={{ padding: 24 }}>
+                <div className="spinner" /> Optimizing routes — this can take a few seconds…
+              </div>
+            </div>
+          )}
+
+          {selectedOption && selectedOption.status === "failed" && (
+            <div className="card card-pad">
+              <div className="alert alert-error" style={{ marginBottom: 12 }}>
+                {selectedOption.error_detail || "Generation failed."}
+              </div>
+              <div className="stat" style={{ marginBottom: 12 }}>Your existing options are unchanged.</div>
+              <button className="btn btn-ghost" onClick={() => dismissOption(selectedOption.id)}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {selectedOption && selectedOption.status !== "pending" && selectedOption.status !== "failed" && (
             <>
               <RouteMap routes={mapRoutes} />
 

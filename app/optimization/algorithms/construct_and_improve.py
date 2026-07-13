@@ -1,6 +1,9 @@
 """HEURISTIC tier: parallel cheapest-insertion construction followed by
 local search (intra-route 2-opt, cross-route Or-opt relocation, and
-inter-route stop exchange) run to convergence.
+inter-route stop exchange) run to convergence — or until the
+time_budget_seconds deadline, whichever comes first (anytime behavior:
+expiry returns the best solution found so far, construction itself is
+never budgeted).
 
 Every route is anchored to its own courier's start/end terminals, so all
 travel arithmetic is parameterized by courier index. An empty route costs
@@ -10,6 +13,8 @@ Used for instances too large for the exact Held-Karp + set-partition DP in
 exact_dp.py (see AlgorithmConfig.optimal_tier_max_stops).
 """
 from __future__ import annotations
+
+import time
 
 from app.optimization.base import RoutingAlgorithmBase
 from app.optimization.models import (
@@ -22,6 +27,10 @@ from app.optimization.models import (
 from app.optimization.registry import register_algorithm
 
 EPSILON = 1e-9
+
+
+def _expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() > deadline
 
 
 class _RouteOps:
@@ -134,13 +143,15 @@ def _construct_cheapest_insertion(
     return routes, unplaced
 
 
-def _two_opt_pass(ops: _RouteOps, route: list[int], c: int) -> bool:
+def _two_opt_pass(ops: _RouteOps, route: list[int], c: int, deadline: float | None = None) -> bool:
     improved_any = False
     improved = True
-    while improved:
+    while improved and not _expired(deadline):
         improved = False
         length = len(route)
         for i in range(length - 1):
+            if _expired(deadline):
+                return improved_any
             for j in range(i + 1, length):
                 candidate = route[:i] + route[i : j + 1][::-1] + route[j + 1 :]
                 if ops.route_travel_seconds(candidate, c) < ops.route_travel_seconds(route, c) - EPSILON:
@@ -150,7 +161,9 @@ def _two_opt_pass(ops: _RouteOps, route: list[int], c: int) -> bool:
     return improved_any
 
 
-def _or_opt_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) -> bool:
+def _or_opt_pass(
+    ops: _RouteOps, routes: list[list[int]], windows: list[int], deadline: float | None = None
+) -> bool:
     improved_any = False
     for c_from in range(len(routes)):
         for seg_len in (1, 2, 3):
@@ -158,6 +171,8 @@ def _or_opt_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) ->
             if seg_len > len(route_from):
                 continue
             for start in range(len(route_from) - seg_len + 1):
+                if _expired(deadline):
+                    return improved_any
                 segment = route_from[start : start + seg_len]
                 remainder = route_from[:start] + route_from[start + seg_len :]
 
@@ -195,12 +210,16 @@ def _or_opt_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) ->
     return improved_any
 
 
-def _exchange_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) -> bool:
+def _exchange_pass(
+    ops: _RouteOps, routes: list[list[int]], windows: list[int], deadline: float | None = None
+) -> bool:
     improved_any = False
     for c1 in range(len(routes)):
         for c2 in range(c1 + 1, len(routes)):
             r1, r2 = routes[c1], routes[c2]
             for i in range(len(r1)):
+                if _expired(deadline):
+                    return improved_any
                 for j in range(len(r2)):
                     new_r1 = r1[:i] + [r2[j]] + r1[i + 1 :]
                     new_r2 = r2[:j] + [r1[i]] + r2[j + 1 :]
@@ -218,16 +237,23 @@ def _exchange_pass(ops: _RouteOps, routes: list[list[int]], windows: list[int]) 
     return improved_any
 
 
-def _improve_to_convergence(ops: _RouteOps, routes: list[list[int]], windows: list[int]) -> None:
+def _improve_to_convergence(
+    ops: _RouteOps, routes: list[list[int]], windows: list[int], deadline: float | None = None
+) -> None:
+    """Runs to a local optimum, or until `deadline` (time.monotonic() value)
+    expires — whichever comes first. On expiry the current routes are kept:
+    every intermediate state is a complete, window-feasible solution, so the
+    budget trades quality, never validity.
+    """
     improved = True
-    while improved:
+    while improved and not _expired(deadline):
         improved = False
         for c, route in enumerate(routes):
-            if _two_opt_pass(ops, route, c):
+            if _two_opt_pass(ops, route, c, deadline):
                 improved = True
-        if _or_opt_pass(ops, routes, windows):
+        if _or_opt_pass(ops, routes, windows, deadline):
             improved = True
-        if _exchange_pass(ops, routes, windows):
+        if _exchange_pass(ops, routes, windows, deadline):
             improved = True
 
 
@@ -262,8 +288,12 @@ class CheapestInsertion2OptAlgorithm(RoutingAlgorithmBase):
                 feasible=not unassigned,
             )
 
+        # Construction is never budgeted — a complete construction is required
+        # for a meaningful (feasibility-accurate) result. The budget only
+        # limits how long we polish it.
         routes, unplaced = _construct_cheapest_insertion(ops, k, windows)
-        _improve_to_convergence(ops, routes, windows)
+        deadline = time.monotonic() + time_budget_seconds if time_budget_seconds is not None else None
+        _improve_to_convergence(ops, routes, windows, deadline)
 
         courier_routes = tuple(
             ops.to_courier_route(couriers[c].id, routes[c], c) for c in range(k)

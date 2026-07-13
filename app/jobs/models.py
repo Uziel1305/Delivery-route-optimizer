@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -16,10 +16,12 @@ class JobStatus(str, enum.Enum):
 
 
 class OptionStatus(str, enum.Enum):
+    PENDING = "pending"  # placeholder row; a worker task is solving it
     ACTIVE = "active"
     STALE = "stale"
     PUBLISHED = "published"
     SUPERSEDED = "superseded"
+    FAILED = "failed"  # solve failed; reason in Option.error_detail
 
 
 class CourierCountMode(str, enum.Enum):
@@ -100,6 +102,7 @@ class Option(Base):
     total_duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     feasible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[OptionStatus] = mapped_column(Enum(OptionStatus), nullable=False, default=OptionStatus.ACTIVE)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_option_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("options.id"), nullable=True)
     stops_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
