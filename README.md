@@ -2,7 +2,7 @@
 
 A web app for managers to assign delivery stops to couriers with optimal routing.
 
-FastAPI + SQLAlchemy + PostgreSQL, Celery + RabbitMQ, self-hosted OSRM (travel times), Photon (geocoding), React frontend — all in Docker Compose.
+FastAPI + SQLAlchemy + PostgreSQL, Celery + RabbitMQ, self-hosted OSRM (travel times), Photon (geocoding), React frontend — all in Docker Compose. See [architecture.md](architecture.md) for the full architecture.
 
 ## Running the stack
 
