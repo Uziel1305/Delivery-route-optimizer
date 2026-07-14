@@ -69,6 +69,7 @@ class JobCourierLocationsUpdateRequest(BaseModel):
 
 class CourierJobOut(BaseModel):
     job_id: str
+    delivery_date: date | None
     start_lat: float | None
     start_lon: float | None
     start_address_label: str | None

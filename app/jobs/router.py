@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -792,13 +792,19 @@ def list_my_jobs(
     for job, jc, _route_stop_id in rows:
         counts.setdefault(job.id, [job, jc, 0])
         counts[job.id][2] += 1
+    entries = sorted(
+        counts.values(),
+        key=lambda item: item[0].delivery_date or date.min,
+        reverse=True,  # newest delivery date first; date-less legacy days last
+    )
     return [
         CourierJobOut(
             job_id=job.id,
+            delivery_date=job.delivery_date,
             stop_count=count,
             **{f: getattr(jc, f) for f in LOCATION_FIELDS},
         )
-        for job, jc, count in counts.values()
+        for job, jc, count in entries
     ]
 
 

@@ -227,4 +227,7 @@ def test_ui_read_endpoints(client, unique_suffix):
     client.post(f"/jobs/{job_id}/options/{option['id']}/publish", headers=mgr)
 
     my_jobs = client.get("/couriers/me/jobs", headers=cour).json()
-    assert any(j["job_id"] == job_id and j["stop_count"] == 3 for j in my_jobs)
+    mine = next(j for j in my_jobs if j["job_id"] == job_id)
+    assert mine["stop_count"] == 3
+    # The courier UI titles cards by date — the endpoint must carry it.
+    assert mine["delivery_date"] == "2026-07-06"

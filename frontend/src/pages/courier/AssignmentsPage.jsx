@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import RouteMap, { ROUTE_COLORS } from "../../components/RouteMap";
 import { Icon } from "../../components/icons";
+import { formatDate } from "../../utils/format";
 
 export default function AssignmentsPage() {
   const [jobs, setJobs] = useState([]);
@@ -76,7 +77,7 @@ export default function AssignmentsPage() {
       ) : (
         <div className="split">
           <div>
-            <h3 style={{ marginBottom: 12 }}>Jobs ({jobs.length})</h3>
+            <h3 style={{ marginBottom: 12 }}>Delivery Days ({jobs.length})</h3>
             <div className="list" style={{ marginBottom: 20 }}>
               {jobs.map((j) => (
                 <div
@@ -92,7 +93,7 @@ export default function AssignmentsPage() {
                   <div className="list-row-main">
                     <Icon.Package />
                     <div>
-                      <div className="list-row-title">Job {j.job_id.slice(0, 8)}</div>
+                      <div className="list-row-title">{formatDate(j.delivery_date)}</div>
                       <div className="list-row-sub">{j.stop_count} stops</div>
                       {j.start_address_label && (
                         <div className="list-row-sub">
@@ -126,7 +127,7 @@ export default function AssignmentsPage() {
             ) : (
               <div className="card empty">
                 <div className="empty-icon">📍</div>
-                Select a job to see the route.
+                Select a delivery day to see the route.
               </div>
             )}
           </div>
