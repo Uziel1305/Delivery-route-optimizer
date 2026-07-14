@@ -39,6 +39,7 @@ Thumbs.db
 
 # Local documents (not part of the repo)
 architecture.docx
+architecture.md
 
 # Local benchmark results (untracked for now)
 benchmarks/
