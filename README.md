@@ -4,6 +4,24 @@ A web app for managers to assign delivery stops to couriers with optimal routing
 
 FastAPI + SQLAlchemy + PostgreSQL, Celery + RabbitMQ, self-hosted OSRM (travel times), Photon (geocoding), React frontend — all in Docker Compose. See [architecture.md](architecture.md) for the full architecture.
 
+## Screenshots
+
+**Manager's delivery day** — stops, generated options, and each courier's optimized route drawn over real OSRM road times:
+
+![Manager day screen with optimized routes on the map](docs/images/day-routes.png)
+
+**Async route generation** — generating returns instantly with a pending option; a Celery worker solves in the background while the UI polls:
+
+![Options list showing a pending option being optimized](docs/images/pending-option.png)
+
+**Courier's view** — the published route, stops in driving order:
+
+![Courier assignment view with ordered stops and route map](docs/images/courier-assignments.png)
+
+**Delivery address book** — reusable saved locations, validated via Photon geocoding:
+
+![Delivery locations address book](docs/images/delivery-locations.png)
+
 ## Running the stack
 
 ```bash
