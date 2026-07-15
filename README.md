@@ -6,21 +6,47 @@ FastAPI + SQLAlchemy + PostgreSQL, Celery + RabbitMQ, self-hosted OSRM (travel t
 
 ## Screenshots
 
-**Manager's delivery day** — stops, generated options, and each courier's optimized route drawn over real OSRM road times:
+**Sign in:**
 
-![Manager day screen with optimized routes on the map](docs/images/day-routes.png)
+![Login page](docs/images/login.jpg)
 
-**Async route generation** — generating returns instantly with a pending option; a Celery worker solves in the background while the UI polls:
+**Registration** — pick a role at sign-up; managers plan routes, couriers drive them:
 
-![Options list showing a pending option being optimized](docs/images/pending-option.png)
+![Manager registration](docs/images/register-manager.jpg)
+
+![Courier registration](docs/images/register-courier.jpg)
+
+**Manager home** — delivery days at a glance:
+
+![Manager home with delivery days list](docs/images/manager-home.jpg)
+
+**Couriers roster** — invite couriers by username and manage the team; each courier carries their own default start/end addresses:
+
+![Couriers page with roster and invite-by-username](docs/images/manager-couriers.jpg)
+
+**Courier invites** — the courier accepts or rejects a manager's invitation:
+
+![Courier invites page with a pending invitation](docs/images/courier-invites.jpg)
+
+**Delivery address book** — reusable saved locations, validated via Photon geocoding (city → street → house number):
+
+![Delivery locations address book](docs/images/delivery-locations.jpg)
+
+**Creating a delivery day** — pick a date and assign couriers:
+
+![Creating a delivery day](docs/images/create-delivery-day.gif)
+
+**Route generation** — generating returns instantly with a pending option; a Celery worker solves in the background and the optimized per-courier split appears on the map over real OSRM road times:
+
+![Generating an optimized route split](docs/images/generate-route-split.gif)
+
+**Refining an option** — move a stop to another courier (instant re-solve) or try the same day with a different number of couriers:
+
+![Swapping a stop and generating with N couriers](docs/images/swap-and-try-n-couriers.gif)
 
 **Courier's view** — the published route, stops in driving order:
 
-![Courier assignment view with ordered stops and route map](docs/images/courier-assignments.png)
-
-**Delivery address book** — reusable saved locations, validated via Photon geocoding:
-
-![Delivery locations address book](docs/images/delivery-locations.png)
+![Courier route view with ordered stops and map](docs/images/courier-route.jpg)
 
 ## Running the stack
 
