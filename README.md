@@ -50,8 +50,23 @@ FastAPI + SQLAlchemy + PostgreSQL, Celery + RabbitMQ, self-hosted OSRM (travel t
 
 ## Running the stack
 
+First create your `.env` (then edit secrets, or keep the dev defaults):
+
 ```bash
-cp .env.example .env      # then edit secrets (or keep the dev defaults)
+# Linux / macOS / Git Bash
+cp .env.example .env
+```
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+# Windows CMD
+copy .env.example .env
+```
+
+Then start everything (same command on every OS):
+
+```bash
 docker compose up --build
 ```
 
@@ -71,7 +86,21 @@ pytest tests/optimization
 
 # Integration tests — require the stack to be up (real Postgres + OSRM + Photon)
 docker compose up -d
+
+# Linux / macOS / Git Bash
 API_BASE_URL=http://localhost:8000 pytest tests/integration
 ```
 
+```powershell
+# Windows PowerShell
+$env:API_BASE_URL = "http://localhost:8000"; pytest tests/integration
+# Windows CMD
+set API_BASE_URL=http://localhost:8000 && pytest tests/integration
+```
+
 The integration suite auto-skips if the backend isn't reachable.
+
+## Troubleshooting
+
+- **`osrm-init` exits with code 2 and a garbled `set: pipefail ... invalid option` error** — the shell script was checked out with Windows (CRLF) line endings. This repo now enforces LF via `.gitattributes`, so a fresh `git clone` just works. If you cloned before that fix, refresh your checkout: `git rm --cached osrm/init.sh && git checkout osrm/init.sh` (or re-clone).
+- **`Bind for 0.0.0.0:8000 failed: port is already allocated`** — another process or an old container is using the port. Find it with `docker ps`, stop it (`docker rm -f <name>`), or free the port, then run `docker compose up` again.
